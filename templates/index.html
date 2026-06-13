@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Rapor Motoru</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      background: #EEF2F7;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    .header {
+      background: #1A1A2E;
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 12px rgba(0,0,0,.35);
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .header-icon {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, #4A90D9, #2C5282);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .header-title { font-size: 17px; font-weight: 700; color: #fff; letter-spacing: .3px; }
+    .header-sub   { font-size: 12px; color: rgba(255,255,255,.5); margin-top: 2px; }
+
+    .network-badge {
+      background: rgba(74,144,217,.15);
+      border: 1px solid rgba(74,144,217,.4);
+      border-radius: 20px;
+      padding: 7px 16px;
+      font-size: 12px; font-family: monospace;
+      color: #93C5FD;
+      cursor: pointer;
+      transition: background .2s;
+      white-space: nowrap;
+    }
+    .network-badge:hover { background: rgba(74,144,217,.3); }
+
+    /* ── Main ───────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 40px 20px 60px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 4px 28px rgba(0,0,0,.09);
+      padding: 36px;
+      width: 100%;
+      max-width: 620px;
+    }
+
+    /* ── Tabs ───────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #E2E8F0;
+      margin-bottom: 28px;
+    }
+    .tab-btn {
+      padding: 10px 22px;
+      font-size: 14px; font-weight: 600;
+      color: #718096;
+      background: none; border: none;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn:hover { color: #4A90D9; }
+    .tab-btn.active { color: #4A90D9; border-bottom-color: #4A90D9; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Drop Zone ──────────────────────────────────────────── */
+    .drop-zone {
+      border: 2.5px dashed #CBD5E1;
+      border-radius: 14px;
+      padding: 52px 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .drop-zone:hover    { border-color: #4A90D9; background: #F0F7FF; }
+    .drop-zone.drag-over{ border-color: #4A90D9; background: #E8F2FF; }
+    .drop-zone.compact  { padding: 18px 22px; }
+
+    .dz-icon  { font-size: 52px; margin-bottom: 14px; line-height: 1; }
+    .drop-zone.compact .dz-icon { font-size: 34px; margin-bottom: 8px; }
+
+    .dz-title { font-size: 20px; font-weight: 700; color: #1A202C; margin-bottom: 8px; }
+    .drop-zone.compact .dz-title { font-size: 15px; margin-bottom: 4px; }
+
+    .dz-sub { font-size: 14px; color: #718096; margin-bottom: 22px; line-height: 1.5; }
+    .drop-zone.compact .dz-sub { font-size: 12px; margin-bottom: 12px; }
+
+    .btn-row-dz { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+    .btn-folder, .btn-files {
+      padding: 10px 22px;
+      border-radius: 9px;
+      font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer; transition: background .2s;
+    }
+    .btn-folder { background: #4A90D9; color: #fff; }
+    .btn-folder:hover { background: #3B7CC6; }
+    .btn-files  { background: #F0F4F8; color: #4A5568; border: 1px solid #CBD5E1; }
+    .btn-files:hover  { background: #E2E8F0; }
+
+    /* ── Info section (after selection) ────────────────────── */
+    .section { display: none; }
+    .section.visible { display: block; }
+
+    .info-bar {
+      display: flex; align-items: center; gap: 10px;
+      flex-wrap: wrap; margin-top: 20px;
+    }
+
+    .badge {
+      border-radius: 20px; padding: 5px 13px;
+      font-size: 13px; font-weight: 600; white-space: nowrap;
+    }
+    .badge-blue   { background: #EBF4FF; color: #2C5282; }
+    .badge-green  { background: #F0FFF4; color: #276749; }
+    .badge-folder {
+      background: #FAFAFA; color: #4A5568;
+      border: 1px solid #E2E8F0;
+      max-width: 220px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .btn-change {
+      margin-left: auto; padding: 5px 14px;
+      background: none; border: 1px solid #CBD5E1;
+      border-radius: 7px; font-size: 12px; color: #718096; cursor: pointer;
+    }
+    .btn-change:hover { border-color: #4A90D9; color: #4A90D9; }
+
+    /* ── Divider ────────────────────────────────────────────── */
+    .divider { height: 1px; background: #EDF2F7; margin: 24px 0; }
+
+    /* ── Form ───────────────────────────────────────────────── */
+    .form-label {
+      display: block; font-size: 12px; font-weight: 700;
+      color: #718096; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px;
+    }
+    .form-input {
+      width: 100%; padding: 13px 16px;
+      border: 2px solid #E2E8F0; border-radius: 9px;
+      font-size: 16px; color: #1A202C;
+      outline: none; transition: border-color .2s;
+      font-family: inherit;
+    }
+    .form-input:focus { border-color: #4A90D9; }
+    .form-hint { font-size: 12px; color: #A0AEC0; margin-top: 6px; }
+
+    /* ── Generate button ────────────────────────────────────── */
+    .btn-generate {
+      display: block; width: 100%; margin-top: 22px;
+      padding: 15px; border: none; border-radius: 11px;
+      background: linear-gradient(135deg, #1A3A5C, #4A90D9);
+      color: #fff; font-size: 16px; font-weight: 700;
+      letter-spacing: .3px; cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    .btn-generate:hover   { opacity: .93; }
+    .btn-generate:active  { transform: scale(.99); }
+    .btn-generate:disabled{ opacity: .55; cursor: not-allowed; }
+
+    /* ── PDF Merge List ─────────────────────────────────────── */
+    .merge-drop-zone {
+      border: 2.5px dashed #CBD5E1;
+      border-radius: 14px;
+      padding: 40px 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .merge-drop-zone:hover    { border-color: #4A90D9; background: #F0F7FF; }
+    .merge-drop-zone.drag-over{ border-color: #4A90D9; background: #E8F2FF; }
+
+    .pdf-list {
+      margin-top: 16px;
+      border: 1.5px solid #E2E8F0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .pdf-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid #EDF2F7;
+      background: #fff;
+      cursor: grab;
+      transition: background .15s;
+      user-select: none;
+    }
+    .pdf-item:last-child { border-bottom: none; }
+    .pdf-item:hover { background: #F7FAFC; }
+    .pdf-item.dragging { opacity: .45; background: #EBF4FF; }
+    .pdf-item.drag-target { border-top: 2px solid #4A90D9; }
+
+    .pdf-order {
+      width: 24px; height: 24px;
+      background: #EBF4FF; color: #2C5282;
+      border-radius: 50%;
+      font-size: 12px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .pdf-name {
+      flex: 1;
+      font-size: 13px; color: #2D3748;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .pdf-size { font-size: 11px; color: #A0AEC0; flex-shrink: 0; }
+    .pdf-remove {
+      width: 22px; height: 22px;
+      border: none; background: none;
+      color: #CBD5E1; cursor: pointer;
+      font-size: 16px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      flex-shrink: 0;
+      transition: color .15s, background .15s;
+    }
+    .pdf-remove:hover { color: #E53E3E; background: #FFF5F5; }
+
+    .merge-actions {
+      display: flex; gap: 10px; margin-top: 14px; align-items: center;
+    }
+    .btn-add-more {
+      padding: 8px 16px;
+      border-radius: 8px; font-size: 13px; font-weight: 600;
+      background: #F0F4F8; color: #4A5568;
+      border: 1px solid #CBD5E1; cursor: pointer;
+      transition: background .2s;
+    }
+    .btn-add-more:hover { background: #E2E8F0; }
+    .merge-hint { font-size: 12px; color: #A0AEC0; }
+
+    .btn-merge {
+      display: block; width: 100%; margin-top: 18px;
+      padding: 15px; border: none; border-radius: 11px;
+      background: linear-gradient(135deg, #1A4731, #38A169);
+      color: #fff; font-size: 16px; font-weight: 700;
+      letter-spacing: .3px; cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    .btn-merge:hover   { opacity: .93; }
+    .btn-merge:active  { transform: scale(.99); }
+    .btn-merge:disabled{ opacity: .55; cursor: not-allowed; }
+
+    /* ── Overlay ────────────────────────────────────────────── */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(10,15,30,.72);
+      backdrop-filter: blur(5px);
+      z-index: 200;
+      align-items: center; justify-content: center;
+    }
+    .overlay.active { display: flex; }
+
+    .ov-card {
+      background: #fff; border-radius: 22px;
+      padding: 48px 40px; text-align: center;
+      max-width: 400px; width: 90%;
+      box-shadow: 0 24px 64px rgba(0,0,0,.28);
+    }
+    .ov-title { font-size: 22px; font-weight: 700; color: #1A202C; margin-bottom: 10px; }
+    .ov-sub   { font-size: 14px; color: #718096; line-height: 1.55; }
+
+    .spinner {
+      width: 60px; height: 60px;
+      border: 5px solid #E2E8F0;
+      border-top-color: #4A90D9;
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+      margin: 0 auto 28px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .ov-circle {
+      width: 76px; height: 76px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 34px; margin: 0 auto 24px;
+    }
+    .ov-circle.success { background: #F0FFF4; border: 3px solid #38A169; }
+    .ov-circle.error   { background: #FFF5F5; border: 3px solid #E53E3E; }
+
+    .ov-btn-row { display: flex; gap: 12px; justify-content: center; margin-top: 28px; }
+
+    .btn-sm-primary {
+      padding: 11px 26px; background: #38A169; color: #fff;
+      border-radius: 9px; font-size: 14px; font-weight: 600;
+      border: none; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-sm-primary:hover { background: #2F855A; }
+    .btn-sm-outline {
+      padding: 11px 26px; background: none;
+      border: 2px solid #E2E8F0; border-radius: 9px;
+      font-size: 14px; font-weight: 600; color: #4A5568; cursor: pointer;
+    }
+    .btn-sm-outline:hover { border-color: #4A90D9; color: #4A90D9; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-left">
+    <div class="header-icon">📄</div>
+    <div>
+      <div class="header-title">PDF Rapor Motoru</div>
+      <div class="header-sub">Fotoğraf klasörünü seçin, PDF oluşturun</div>
+    </div>
+  </div>
+  <div class="network-badge" id="net-badge" title="Kopyalamak için tıklayın">
+    🌐 {{ local_ip }}:5000
+  </div>
+</header>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<main>
+  <div class="card">
+
+    <!-- ── Tabs ────────────────────────────────────────────── -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-create">📷 PDF Oluştur</button>
+      <button class="tab-btn"        data-tab="tab-merge" >📎 PDF Birleştir</button>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         TAB 1 — PDF Oluştur
+    ══════════════════════════════════════════════════════ -->
+    <div class="tab-panel active" id="tab-create">
+
+      <!-- Hidden inputs -->
+      <input type="file" id="input-folder" accept=".jpg,.jpeg,.png" webkitdirectory multiple style="display:none">
+      <input type="file" id="input-files"  accept=".jpg,.jpeg,.png" multiple style="display:none">
+
+      <!-- Drop Zone -->
+      <div class="drop-zone" id="drop-zone">
+        <div class="dz-icon"  id="dz-icon">📁</div>
+        <div class="dz-title" id="dz-title">Klasörü Seçin</div>
+        <div class="dz-sub"   id="dz-sub">
+          Fotoğrafların bulunduğu klasörü seçin veya buraya sürükleyin
+        </div>
+        <div class="btn-row-dz">
+          <button class="btn-folder" id="btn-folder" type="button">📁 Klasör Seç</button>
+          <button class="btn-files"  id="btn-files"  type="button">🖼 Dosya Seç</button>
+        </div>
+      </div>
+
+      <!-- Info bar -->
+      <div class="section" id="sec-info">
+        <div class="info-bar">
+          <span class="badge badge-blue"   id="badge-count">0 resim</span>
+          <span class="badge badge-green"  id="badge-pages">~0 sayfa</span>
+          <span class="badge badge-folder" id="badge-folder" title="">📂 —</span>
+          <button class="btn-change" id="btn-change">Değiştir</button>
+        </div>
+      </div>
+
+      <div class="divider section" id="sec-divider"></div>
+
+      <!-- Subtitle input -->
+      <div class="section" id="sec-subtitle">
+        <label class="form-label" for="subtitle-input">Üst Satır Başlığı</label>
+        <textarea class="form-input" id="subtitle-input" rows="2"
+                  placeholder="Fen İşleri Dairesi Başkanlığı…"
+                  style="resize:vertical; font-size:13px; line-height:1.5">{{ default_subtitle }}</textarea>
+        <div class="form-hint">Sayfanın en üstünde küçük gri yazıyla görünür — Türkçe karakterler desteklenir</div>
+      </div>
+
+      <!-- Title input -->
+      <div class="section" id="sec-title" style="margin-top:18px">
+        <label class="form-label" for="title-input">PDF Başlığı</label>
+        <input class="form-input" type="text" id="title-input"
+               placeholder="Başlığı buraya yazın..." maxlength="120">
+        <div class="form-hint">Her sayfada başlığın altında kalın yazıyla görünür — Türkçe karakterler desteklenir</div>
+      </div>
+
+      <!-- Generate -->
+      <div class="section" id="sec-btn">
+        <button class="btn-generate" id="btn-generate" type="button">⚡ PDF Oluştur</button>
+      </div>
+
+    </div><!-- /tab-create -->
+
+    <!-- ══════════════════════════════════════════════════════
+         TAB 2 — PDF Birleştir
+    ══════════════════════════════════════════════════════ -->
+    <div class="tab-panel" id="tab-merge">
+
+      <!-- Hidden PDF input -->
+      <input type="file" id="input-pdfs" accept=".pdf" multiple style="display:none">
+
+      <!-- Drop zone (shown when list is empty) -->
+      <div class="merge-drop-zone" id="merge-drop-zone">
+        <div class="dz-icon">📎</div>
+        <div class="dz-title" style="font-size:18px;font-weight:700;color:#1A202C;margin-bottom:8px">
+          PDF Dosyalarını Seçin
+        </div>
+        <div class="dz-sub" style="font-size:13px;color:#718096;margin-bottom:20px">
+          Birleştirmek istediğiniz PDF'leri seçin veya buraya sürükleyin
+        </div>
+        <button class="btn-folder" id="btn-pick-pdfs" type="button" style="margin:0 auto">📎 PDF Seç</button>
+      </div>
+
+      <!-- PDF list (shown after selection) -->
+      <div id="merge-list-section" style="display:none">
+        <div class="pdf-list" id="pdf-list"></div>
+
+        <div class="merge-actions">
+          <button class="btn-add-more" id="btn-add-more" type="button">+ Daha Fazla Ekle</button>
+          <span class="merge-hint" id="merge-hint">Sıralamak için sürükleyin</span>
+        </div>
+
+        <div style="margin-top:20px">
+          <label class="form-label" for="merge-name-input">Çıktı Dosya Adı</label>
+          <input class="form-input" type="text" id="merge-name-input"
+                 placeholder="birlesik" maxlength="120" style="font-size:14px">
+        </div>
+
+        <button class="btn-merge" id="btn-merge" type="button">📎 PDF'leri Birleştir</button>
+      </div>
+
+    </div><!-- /tab-merge -->
+
+  </div>
+</main>
+
+<!-- ── Loading overlay ─────────────────────────────────────────── -->
+<div class="overlay" id="ov-loading">
+  <div class="ov-card">
+    <div class="spinner"></div>
+    <div class="ov-title" id="ov-loading-title">İşleniyor…</div>
+    <div class="ov-sub"   id="ov-loading-msg">Lütfen bekleyin.</div>
+  </div>
+</div>
+
+<!-- ── Success overlay ─────────────────────────────────────────── -->
+<div class="overlay" id="ov-success">
+  <div class="ov-card">
+    <div class="ov-circle success">✓</div>
+    <div class="ov-title">Tamamlandı!</div>
+    <div class="ov-sub" id="ov-success-msg">İşlem başarıyla tamamlandı.</div>
+    <div class="ov-btn-row">
+      <a class="btn-sm-primary" id="btn-download" href="#" download>⬇ İndir</a>
+      <button class="btn-sm-outline" id="btn-new">Yeni İşlem</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Error overlay ───────────────────────────────────────────── -->
+<div class="overlay" id="ov-error">
+  <div class="ov-card">
+    <div class="ov-circle error">✕</div>
+    <div class="ov-title">Hata Oluştu</div>
+    <div class="ov-sub" id="ov-error-msg">Bilinmeyen hata.</div>
+    <div class="ov-btn-row">
+      <button class="btn-sm-outline" id="btn-retry">Geri Dön</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ── Tab switching ─────────────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ── Shared overlay helpers ────────────────────────────────────────
+const ovLoading     = document.getElementById("ov-loading");
+const ovLoadingTitle= document.getElementById("ov-loading-title");
+const ovLoadingMsg  = document.getElementById("ov-loading-msg");
+const ovSuccess     = document.getElementById("ov-success");
+const ovSuccessMsg  = document.getElementById("ov-success-msg");
+const btnDownload   = document.getElementById("btn-download");
+const btnNew        = document.getElementById("btn-new");
+const ovError       = document.getElementById("ov-error");
+const ovErrorMsg    = document.getElementById("ov-error-msg");
+const btnRetry      = document.getElementById("btn-retry");
+
+let blobUrl = null;
+
+function showOverlay(el) {
+  document.querySelectorAll(".overlay").forEach(o => o.classList.remove("active"));
+  el.classList.add("active");
+}
+function hideOverlay(el) { el.classList.remove("active"); }
+function showError(msg)   { ovErrorMsg.textContent = msg; showOverlay(ovError); }
+
+function showSuccess(title, fileName) {
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+  btnDownload.href     = blobUrl;
+  btnDownload.download = fileName;
+  ovSuccessMsg.textContent = `"${title}" başarıyla oluşturuldu.`;
+  showOverlay(ovSuccess);
+}
+
+btnNew  .addEventListener("click", () => { hideOverlay(ovSuccess); });
+btnRetry.addEventListener("click", () =>  hideOverlay(ovError));
+
+// ── Network badge ─────────────────────────────────────────────────
+document.getElementById("net-badge").addEventListener("click", () => {
+  const raw = document.getElementById("net-badge").textContent.replace("🌐 ", "").trim();
+  navigator.clipboard.writeText("http://" + raw).then(() => {
+    const badge = document.getElementById("net-badge");
+    const orig = badge.textContent;
+    badge.textContent = "✓ Kopyalandı!";
+    setTimeout(() => { badge.textContent = orig; }, 2000);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════
+// TAB 1 — PDF Oluştur
+// ════════════════════════════════════════════════════════════════
+const inputFolder  = document.getElementById("input-folder");
+const inputFiles   = document.getElementById("input-files");
+const dropZone     = document.getElementById("drop-zone");
+const dzIcon       = document.getElementById("dz-icon");
+const dzTitle      = document.getElementById("dz-title");
+const dzSub        = document.getElementById("dz-sub");
+const btnFolder    = document.getElementById("btn-folder");
+const btnFiles     = document.getElementById("btn-files");
+const badgeCount   = document.getElementById("badge-count");
+const badgePages   = document.getElementById("badge-pages");
+const badgeFolder  = document.getElementById("badge-folder");
+const btnChange    = document.getElementById("btn-change");
+const subtitleInput = document.getElementById("subtitle-input");
+const titleInput    = document.getElementById("title-input");
+const btnGenerate  = document.getElementById("btn-generate");
+
+const createSections = ["sec-info", "sec-divider", "sec-subtitle", "sec-title", "sec-btn"];
+
+let selectedFiles = [];
+let folderName    = "";
+
+const isImage = f => /\.(jpe?g|png)$/i.test(f.name);
+
+function estimatePages(n) {
+  if (n <= 6) return 1;
+  return Math.ceil(n / 6);
+}
+
+function showCreateSections() {
+  createSections.forEach(id => document.getElementById(id).classList.add("visible"));
+}
+function hideCreateSections() {
+  createSections.forEach(id => document.getElementById(id).classList.remove("visible"));
+}
+
+function setDropZoneCompact(folder) {
+  dropZone.classList.add("compact");
+  dzIcon.textContent  = "✅";
+  dzTitle.textContent = "Klasör Seçildi";
+  dzSub.textContent   = `${folder} · değiştirmek için aşağıdaki düğmeyi kullanın`;
+}
+
+function resetDropZone() {
+  dropZone.classList.remove("compact");
+  dzIcon.textContent  = "📁";
+  dzTitle.textContent = "Klasörü Seçin";
+  dzSub.textContent   = "Fotoğrafların bulunduğu klasörü seçin veya buraya sürükleyin";
+}
+
+function applyFiles(files, folder) {
+  const imgs = files.filter(isImage);
+  if (imgs.length === 0) { showError("Seçilen yerde JPG/PNG dosyası bulunamadı."); return; }
+  selectedFiles = imgs;
+  folderName    = folder;
+  titleInput.value        = folder;
+  badgeCount.textContent  = `${imgs.length} resim`;
+  badgePages.textContent  = `~${estimatePages(imgs.length)} sayfa`;
+  badgeFolder.textContent = `📂 ${folder}`;
+  badgeFolder.title       = folder;
+  btnGenerate.textContent = `⚡ PDF Oluştur  (${imgs.length} resim)`;
+  setDropZoneCompact(folder);
+  showCreateSections();
+}
+
+function resetCreate() {
+  selectedFiles = [];
+  folderName    = "";
+  inputFolder.value = "";
+  inputFiles.value  = "";
+  titleInput.value  = "";
+  hideCreateSections();
+  resetDropZone();
+}
+
+inputFolder.addEventListener("change", e => {
+  const files = Array.from(e.target.files);
+  let folder = files[0]?.webkitRelativePath?.split("/")[0] || "Seçilen Klasör";
+  applyFiles(files, folder);
+});
+
+inputFiles.addEventListener("change", e => {
+  applyFiles(Array.from(e.target.files), "Seçilen Dosyalar");
+});
+
+btnFolder.addEventListener("click", e => { e.stopPropagation(); inputFolder.click(); });
+btnFiles .addEventListener("click", e => { e.stopPropagation(); inputFiles.click();  });
+dropZone .addEventListener("click", () => { if (!selectedFiles.length) inputFolder.click(); });
+btnChange.addEventListener("click", e => { e.stopPropagation(); resetCreate(); });
+
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", async e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  const items = Array.from(e.dataTransfer.items || []);
+  const dirItem = items.find(i => i.webkitGetAsEntry?.()?.isDirectory);
+  if (dirItem) {
+    const entry = dirItem.webkitGetAsEntry();
+    try { applyFiles(await readDir(entry), entry.name); }
+    catch (err) { showError("Klasör okunamadı: " + err.message); }
+    return;
+  }
+  applyFiles(Array.from(e.dataTransfer.files), "Sürüklenen Dosyalar");
+});
+
+function readDir(dirEntry) {
+  return new Promise((resolve, reject) => {
+    const reader = dirEntry.createReader();
+    const results = [];
+    function read() {
+      reader.readEntries(async entries => {
+        if (!entries.length) { resolve(results); return; }
+        for (const entry of entries) {
+          if (entry.isFile) {
+            await new Promise(res => entry.file(f => { results.push(f); res(); }, res));
+          }
+        }
+        read();
+      }, reject);
+    }
+    read();
+  });
+}
+
+btnGenerate.addEventListener("click", async () => {
+  if (!selectedFiles.length) return;
+
+  const title    = titleInput.value.trim()    || folderName || "Fotoğraf Raporu";
+  const subtitle = subtitleInput.value.trim();
+
+  const fd = new FormData();
+  fd.append("title",    title);
+  fd.append("subtitle", subtitle);
+  selectedFiles.forEach(f => fd.append("images", f));
+
+  ovLoadingTitle.textContent = "PDF oluşturuluyor…";
+  ovLoadingMsg.textContent   = `${selectedFiles.length} resim işleniyor, lütfen bekleyin…`;
+  showOverlay(ovLoading);
+  btnGenerate.disabled = true;
+
+  try {
+    const resp = await fetch("/generate", { method: "POST", body: fd });
+    if (!resp.ok) {
+      let msg = `Sunucu hatası (${resp.status})`;
+      try { msg = (await resp.json()).error; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await resp.blob();
+    blobUrl = URL.createObjectURL(blob);
+    const fileName = title + ".pdf";
+    const a = document.createElement("a");
+    a.href = blobUrl; a.download = fileName;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showSuccess(title, fileName);
+  } catch (err) {
+    console.error(err);
+    showError(err.message || "Bilinmeyen hata oluştu.");
+  } finally {
+    hideOverlay(ovLoading);
+    btnGenerate.disabled = false;
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+// TAB 2 — PDF Birleştir
+// ════════════════════════════════════════════════════════════════
+const inputPdfs       = document.getElementById("input-pdfs");
+const mergeDropZone   = document.getElementById("merge-drop-zone");
+const mergeListSection= document.getElementById("merge-list-section");
+const pdfList         = document.getElementById("pdf-list");
+const btnPickPdfs     = document.getElementById("btn-pick-pdfs");
+const btnAddMore      = document.getElementById("btn-add-more");
+const mergeNameInput  = document.getElementById("merge-name-input");
+const btnMerge        = document.getElementById("btn-merge");
+
+let pdfFiles = [];   // {file, id}
+let dragSrc  = null;
+
+function formatBytes(b) {
+  if (b < 1024)       return b + " B";
+  if (b < 1024*1024)  return (b/1024).toFixed(0) + " KB";
+  return (b/(1024*1024)).toFixed(1) + " MB";
+}
+
+function renderPdfList() {
+  pdfList.innerHTML = "";
+  pdfFiles.forEach((entry, idx) => {
+    const item = document.createElement("div");
+    item.className   = "pdf-item";
+    item.draggable   = true;
+    item.dataset.idx = idx;
+
+    item.innerHTML = `
+      <div class="pdf-order">${idx + 1}</div>
+      <div class="pdf-name" title="${entry.file.name}">${entry.file.name}</div>
+      <div class="pdf-size">${formatBytes(entry.file.size)}</div>
+      <button class="pdf-remove" data-idx="${idx}" title="Kaldır">×</button>
+    `;
+
+    // Drag events for reordering
+    item.addEventListener("dragstart", e => {
+      dragSrc = idx;
+      item.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    item.addEventListener("dragend", () => {
+      document.querySelectorAll(".pdf-item").forEach(el => {
+        el.classList.remove("dragging", "drag-target");
+      });
+    });
+    item.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      document.querySelectorAll(".pdf-item").forEach(el => el.classList.remove("drag-target"));
+      item.classList.add("drag-target");
+    });
+    item.addEventListener("drop", e => {
+      e.preventDefault();
+      if (dragSrc === null || dragSrc === idx) return;
+      const moved = pdfFiles.splice(dragSrc, 1)[0];
+      pdfFiles.splice(idx, 0, moved);
+      renderPdfList();
+    });
+
+    // Remove button
+    item.querySelector(".pdf-remove").addEventListener("click", e => {
+      e.stopPropagation();
+      pdfFiles.splice(idx, 1);
+      if (pdfFiles.length === 0) {
+        mergeListSection.style.display = "none";
+        mergeDropZone.style.display    = "";
+      } else {
+        renderPdfList();
+      }
+    });
+
+    pdfList.appendChild(item);
+  });
+}
+
+function addPdfFiles(files) {
+  const pdfs = Array.from(files).filter(f => f.name.toLowerCase().endsWith(".pdf"));
+  if (!pdfs.length) { showError("Geçerli PDF dosyası bulunamadı."); return; }
+  pdfs.forEach(f => pdfFiles.push({ file: f, id: Math.random() }));
+  mergeDropZone.style.display    = "none";
+  mergeListSection.style.display = "";
+  renderPdfList();
+}
+
+btnPickPdfs.addEventListener("click", e => { e.stopPropagation(); inputPdfs.click(); });
+btnAddMore .addEventListener("click", () => inputPdfs.click());
+mergeDropZone.addEventListener("click", () => inputPdfs.click());
+
+inputPdfs.addEventListener("change", e => {
+  addPdfFiles(e.target.files);
+  inputPdfs.value = "";
+});
+
+mergeDropZone.addEventListener("dragover",  e => { e.preventDefault(); mergeDropZone.classList.add("drag-over"); });
+mergeDropZone.addEventListener("dragleave", ()  => mergeDropZone.classList.remove("drag-over"));
+mergeDropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  mergeDropZone.classList.remove("drag-over");
+  addPdfFiles(e.dataTransfer.files);
+});
+
+btnMerge.addEventListener("click", async () => {
+  if (!pdfFiles.length) return;
+
+  const outputName = mergeNameInput.value.trim() || "birlesik";
+  const fd = new FormData();
+  fd.append("output_name", outputName);
+  pdfFiles.forEach(entry => fd.append("pdfs", entry.file));
+
+  ovLoadingTitle.textContent = "PDF'ler birleştiriliyor…";
+  ovLoadingMsg.textContent   = `${pdfFiles.length} dosya işleniyor, lütfen bekleyin…`;
+  showOverlay(ovLoading);
+  btnMerge.disabled = true;
+
+  try {
+    const resp = await fetch("/merge", { method: "POST", body: fd });
+    if (!resp.ok) {
+      let msg = `Sunucu hatası (${resp.status})`;
+      try { msg = (await resp.json()).error; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await resp.blob();
+    blobUrl = URL.createObjectURL(blob);
+    const fileName = outputName + ".pdf";
+    const a = document.createElement("a");
+    a.href = blobUrl; a.download = fileName;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showSuccess(outputName, fileName);
+  } catch (err) {
+    console.error(err);
+    showError(err.message || "Bilinmeyen hata oluştu.");
+  } finally {
+    hideOverlay(ovLoading);
+    btnMerge.disabled = false;
+  }
+});
+
+// "Yeni İşlem" butonu — aktif sekmeye göre reset
+btnNew.addEventListener("click", () => {
+  hideOverlay(ovSuccess);
+  const activeTab = document.querySelector(".tab-btn.active")?.dataset?.tab;
+  if (activeTab === "tab-merge") {
+    pdfFiles = [];
+    mergeListSection.style.display = "none";
+    mergeDropZone.style.display    = "";
+    mergeNameInput.value = "";
+    inputPdfs.value = "";
+  } else {
+    resetCreate();
+  }
+});
+</script>
+</body>
+</html>

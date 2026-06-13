@@ -1,0 +1,15 @@
+{
+    "title": "Fotoğraf Raporu",
+    "watermark_text": "Fen İşleri Dairesi Başkanlığı Bakım ve Onarım Şube Müdürlüğü  Doğu İlçeleri (8 İlçe) Mezarlık ve Çevre Düzenlemeleri",
+    "output_filename": "fotograf_raporu.pdf",
+    "output_dir": "~/Desktop",
+    "page_margin_mm": 15,
+    "grid_gap_mm": 4,
+    "border_color_hex": "#CCCCCC",
+    "border_width_pt": 0.75,
+    "title_font_size": 12,
+    "page_number_font_size": 8,
+    "title_color_hex": "#1A1A2E",
+    "separator_color_hex": "#4A90D9",
+    "separator_width_pt": 1.2
+}
