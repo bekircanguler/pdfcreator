@@ -5,15 +5,18 @@ Fotoğraf PDF Dönüştürücü — Modern masaüstü uygulaması
 """
 
 import os
-import re
 import sys
+import math
+import time
 import queue
+import random
 import threading
+import tkinter as tk
 from pathlib import Path
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 sys.path.insert(0, str(Path(__file__).parent))
 from engine import load_config, scan_images, build_pdf
@@ -51,46 +54,49 @@ def _safe_filename(title: str) -> str:
 
 # ─── Logo ────────────────────────────────────────────────────────────────────
 
-def make_logo(size: int = 56) -> ctk.CTkImage:
-    s = size
+def make_logo(size: int = 56, pil_only: bool = False):
+    s  = size
+    sc = s / 56  # scale factor relative to 56px reference design
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
+    d   = ImageDraw.Draw(img)
 
     # Doküman gövdesi — beyaz kağıt
     doc_r = int(s * 0.70)
-    d.rounded_rectangle([2, 2, doc_r, s - 2], radius=6,
+    d.rounded_rectangle([2, 2, doc_r, s - 2], radius=max(2, int(6 * sc)),
                          fill=(255, 255, 255, 255), outline=(200, 215, 235, 255), width=1)
 
     # Katlanan köşe
-    fold = 13
+    fold = max(5, int(13 * sc))
     d.polygon([(doc_r - fold, 2), (doc_r, 2 + fold), (doc_r, 2),
                (doc_r - fold, 2)], fill=(37, 99, 235, 160))
     d.line([(doc_r - fold, 2), (doc_r, 2 + fold)],
            fill=(255, 255, 255, 200), width=1)
 
     # Metin satırları
-    line_x1, line_x2 = 8, doc_r - 6
-    for y, length in [(20, 1.0), (27, 0.85), (34, 0.65)]:
-        lx2 = int(line_x1 + (line_x2 - line_x1) * length)
-        d.rounded_rectangle([line_x1, y, lx2, y + 3], radius=1,
+    lx1 = max(4, int(8 * sc))
+    lx2 = doc_r - max(3, int(6 * sc))
+    for y_ref, length in [(20, 1.0), (27, 0.85), (34, 0.65)]:
+        y  = max(6, int(y_ref * sc))
+        h  = max(1, int(3 * sc))
+        ex = int(lx1 + (lx2 - lx1) * length)
+        d.rounded_rectangle([lx1, y, ex, y + h], radius=1,
                              fill=(189, 207, 232, 255))
 
     # Kamera dairesi — sağ alt
-    cx = s - 14
-    cy = s - 14
-    cr = 13
-    # Gölge
-    d.ellipse([cx - cr + 1, cy - cr + 1, cx + cr + 1, cy + cr + 1],
-              fill=(0, 0, 0, 40))
-    # Ana daire (mavi)
-    d.ellipse([cx - cr, cy - cr, cx + cr, cy + cr], fill=(37, 99, 235, 255))
-    # Lens dış
-    d.ellipse([cx - 7, cy - 7, cx + 7, cy + 7], fill=(255, 255, 255, 255))
-    # Lens iç
-    d.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=(37, 99, 235, 255))
-    # Flaş noktası
-    d.ellipse([cx + 6, cy - 10, cx + 10, cy - 6], fill=(255, 255, 255, 200))
+    cx = s - max(7, int(14 * sc))
+    cy = s - max(7, int(14 * sc))
+    cr = max(6, int(13 * sc))
+    d.ellipse([cx-cr+1, cy-cr+1, cx+cr+1, cy+cr+1], fill=(0, 0, 0, 40))
+    d.ellipse([cx-cr, cy-cr, cx+cr, cy+cr], fill=(37, 99, 235, 255))
+    lr = max(3, int(7 * sc))
+    d.ellipse([cx-lr, cy-lr, cx+lr, cy+lr], fill=(255, 255, 255, 255))
+    li = max(2, int(4 * sc))
+    d.ellipse([cx-li, cy-li, cx+li, cy+li], fill=(37, 99, 235, 255))
+    fa, fb = max(3, int(6*sc)), max(5, int(10*sc))
+    d.ellipse([cx+fa, cy-fb, cx+fb, cy-fa], fill=(255, 255, 255, 200))
 
+    if pil_only:
+        return img
     return ctk.CTkImage(light_image=img, dark_image=img, size=(s // 2, s // 2))
 
 
@@ -141,16 +147,193 @@ def labeled_entry(card: ctk.CTkFrame, label: str,
     return ent
 
 
+# ─── Açılış Ekranı ───────────────────────────────────────────────────────────
+
+class SplashScreen(tk.Toplevel):
+    """6.8 saniyelik animasyonlu açılış ekranı."""
+    _W, _H    = 560, 340
+    _BG       = "#0B1929"
+    _BG_RGB   = (11,  25,  41)
+    _RING_RGB = (37,  99,  235)
+    _DOT_RGB  = (28,  55,  95)
+    _RMIN, _RMAX = 50, 132
+
+    _STATUSES = [
+        (0.9, "Modüller yükleniyor..."),
+        (2.4, "Yazı tipleri hazırlanıyor..."),
+        (3.8, "Arayüz oluşturuluyor..."),
+        (5.4, "Hazır!"),
+    ]
+
+    def __init__(self, master, on_done: callable) -> None:
+        super().__init__(master)
+        self.overrideredirect(True)
+        self.wm_attributes("-topmost", True)
+        self.configure(bg=self._BG)
+        self._on_done = on_done
+        self._t0      = time.monotonic()
+        self._done    = False
+
+        rng = random.Random(7)
+        self._dots = [
+            (rng.randint(12, self._W - 12),
+             rng.randint(12, self._H - 12),
+             rng.random() * 6.2832)
+            for _ in range(22)
+        ]
+
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(
+            f"{self._W}x{self._H}"
+            f"+{(sw - self._W) // 2}+{(sh - self._H) // 2}")
+        self.wm_attributes("-alpha", 0.0)
+
+        # Canvas tüm pencereyi kaplar — animasyon buraya çizilir
+        self._cv = tk.Canvas(self, width=self._W, height=self._H,
+                              bg=self._BG, highlightthickness=0)
+        self._cv.pack(fill="both", expand=True)
+
+        self._cx      = self._W // 2
+        self._cy_logo = int(self._H * 0.32)
+
+        # Logo → canvas üzerine doğrudan (z-order kontrolü için)
+        pil = make_logo(220, pil_only=True)
+        self._tk_logo = ImageTk.PhotoImage(pil)
+        self._cv.create_image(self._cx, self._cy_logo,
+                               image=self._tk_logo,
+                               anchor="center", tags="static")
+
+        # Statik yazılar
+        self._cv.create_text(
+            self._cx, int(self._H * 0.60),
+            text="Fotoğraf  ·  PDF Dönüştürücü",
+            font=("", 18, "bold"), fill="#FFFFFF",
+            anchor="center", tags="static")
+        self._cv.create_text(
+            self._cx, int(self._H * 0.71),
+            text="PDF Motor V1",
+            font=("", 10), fill="#2D5A8A",
+            anchor="center", tags="static")
+        self._cv.create_text(
+            self._W - 10, self._H - 8,
+            text="© Bekircan Güler",
+            font=("", 9), fill="#1B3250",
+            anchor="se", tags="static")
+
+        # Dinamik durum yazısı (static tag ile üstte kalır)
+        self._status_id = self._cv.create_text(
+            self._cx, int(self._H * 0.82),
+            text="", font=("", 10), fill="#3D6A9E",
+            anchor="center", tags="static")
+
+        # Progress bar koordinatları (canvas üzerinde elle çizilir)
+        self._bx = (self._W - 440) // 2
+        self._by = int(self._H * 0.90)
+        self._bw = 440
+        self._bh = 4
+
+        self.after(16, self._tick)
+
+    # ── Yardımcılar ───────────────────────────────────────────────────────────
+
+    def _lerp(self, c1: tuple, c2: tuple, t: float) -> str:
+        t = max(0.0, min(1.0, t))
+        r = int(c1[0] + (c2[0] - c1[0]) * t)
+        g = int(c1[1] + (c2[1] - c1[1]) * t)
+        b = int(c1[2] + (c2[2] - c1[2]) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    # ── Ana döngü ─────────────────────────────────────────────────────────────
+
+    def _tick(self) -> None:
+        if self._done:
+            return
+        elapsed = time.monotonic() - self._t0
+
+        # Açılış fade-in (0 → 0.7s)
+        if elapsed < 0.7:
+            self.wm_attributes("-alpha", elapsed / 0.7)
+
+        # Progress değeri (0.8s → 6.0s)
+        prog = max(0.0, min(1.0, (elapsed - 0.8) / 5.2))
+
+        # Durum metni
+        msg = ""
+        for t_trig, text in self._STATUSES:
+            if elapsed >= t_trig:
+                msg = text
+        self._cv.itemconfigure(self._status_id, text=msg)
+
+        # Animasyonlu çizim
+        self._draw(elapsed, prog)
+
+        # Kapanış fade-out (6.1s → 6.8s)
+        if elapsed >= 6.1:
+            self.wm_attributes("-alpha", max(0.0, 1.0 - (elapsed - 6.1) / 0.7))
+
+        # Tamamlandı
+        if elapsed >= 6.8:
+            self._done = True
+            self.destroy()
+            self._on_done()
+            return
+
+        self.after(16, self._tick)
+
+    # ── Çizim ─────────────────────────────────────────────────────────────────
+
+    def _draw(self, t: float, prog: float) -> None:
+        cv  = self._cv
+        BG  = self._BG_RGB
+        RNG = self._RING_RGB
+        DOT = self._DOT_RGB
+
+        cv.delete("anim")   # sadece "anim" etiketli öğeler temizlenir
+
+        cx, cy = self._cx, self._cy_logo
+
+        # Arka plan nefes alan noktalar
+        for dx, dy, ph in self._dots:
+            br  = 0.22 + 0.22 * math.sin(t * 1.1 + ph)
+            col = self._lerp(BG, DOT, br)
+            cv.create_oval(dx-1, dy-1, dx+1, dy+1,
+                           fill=col, outline="", tags="anim")
+
+        # Logo merkezinden genişleyen 3 halka
+        for k in range(3):
+            ph  = ((t * 0.38) + k / 3) % 1.0
+            r   = self._RMIN + ph * (self._RMAX - self._RMIN)
+            f   = 1.0 - ph
+            col = self._lerp(BG, RNG, f * 0.65)
+            w   = max(1, int(f * 2.5))
+            cv.create_oval(cx-r, cy-r, cx+r, cy+r,
+                           outline=col, width=w, tags="anim")
+
+        # Progress bar arkaplanı
+        bx, by, bw, bh = self._bx, self._by, self._bw, self._bh
+        cv.create_rectangle(bx, by, bx+bw, by+bh,
+                             fill="#112030", outline="", tags="anim")
+        # Progress bar dolumu
+        fw = int(bw * prog)
+        if fw > 0:
+            cv.create_rectangle(bx, by, bx+fw, by+bh,
+                                 fill=BTN_PRIMARY, outline="", tags="anim")
+
+        # "static" etiketli öğeleri (logo, yazılar) en üste taşı
+        cv.tag_raise("static")
+
+
 # ─── Ana pencere ─────────────────────────────────────────────────────────────
 
 class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
+        self.withdraw()   # Splash bitmeden ana pencereyi gizle
         self.cfg = load_config()
         self._logo_img = make_logo(56)
         self._setup_window()
         self._build_ui()
-        self.after(20, self._fade_in)   # Açılış animasyonu
+        SplashScreen(self, on_done=self._reveal)
 
     def _setup_window(self) -> None:
         self.title("Fotoğraf - PDF Dönüştürücü")
@@ -162,6 +345,12 @@ class App(ctk.CTk):
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
+
+    def _reveal(self) -> None:
+        """Splash bittikten sonra ana pencereyi göster."""
+        self.attributes("-alpha", 0.0)
+        self.deiconify()
+        self.after(20, self._fade_in)
 
     def _fade_in(self, alpha: float = 0.0) -> None:
         alpha = min(1.0, alpha + 0.07)
