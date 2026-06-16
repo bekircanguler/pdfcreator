@@ -5,6 +5,7 @@ PDF generation engine — shared between CLI (app.py) and web (web_app.py).
 
 import math
 import json
+import sys
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -26,7 +27,13 @@ IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg"})
 MIN_PER_PAGE = 4
 MAX_PER_PAGE = 6
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+def _config_path() -> Path:
+    # PyInstaller onefile: dosyalar _MEIPASS altına çıkarılır
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "config.json"
+    return Path(__file__).resolve().parent.parent / "config.json"
+
+CONFIG_PATH = _config_path()
 
 DEFAULTS: Dict[str, Any] = {
     "title": "Fotoğraf Raporu",
