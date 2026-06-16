@@ -156,7 +156,7 @@ class SplashScreen(tk.Toplevel):
     _BG_RGB   = (11,  25,  41)
     _RING_RGB = (37,  99,  235)
     _DOT_RGB  = (28,  55,  95)
-    _RMIN, _RMAX = 50, 132
+    _RMIN, _RMAX = 38, 98
 
     _STATUSES = [
         (0.9, "Modüller yükleniyor..."),
@@ -194,10 +194,10 @@ class SplashScreen(tk.Toplevel):
         self._cv.pack(fill="both", expand=True)
 
         self._cx      = self._W // 2
-        self._cy_logo = int(self._H * 0.32)
+        self._cy_logo = int(self._H * 0.26)
 
         # Logo → canvas üzerine doğrudan (z-order kontrolü için)
-        pil = make_logo(220, pil_only=True)
+        pil = make_logo(156, pil_only=True)   # 78px görüntü
         self._tk_logo = ImageTk.PhotoImage(pil)
         self._cv.create_image(self._cx, self._cy_logo,
                                image=self._tk_logo,
@@ -205,12 +205,12 @@ class SplashScreen(tk.Toplevel):
 
         # Statik yazılar
         self._cv.create_text(
-            self._cx, int(self._H * 0.60),
+            self._cx, int(self._H * 0.52),
             text="Fotoğraf  ·  PDF Dönüştürücü",
             font=("", 18, "bold"), fill="#FFFFFF",
             anchor="center", tags="static")
         self._cv.create_text(
-            self._cx, int(self._H * 0.71),
+            self._cx, int(self._H * 0.63),
             text="PDF Motor V1",
             font=("", 10), fill="#2D5A8A",
             anchor="center", tags="static")
@@ -222,13 +222,13 @@ class SplashScreen(tk.Toplevel):
 
         # Dinamik durum yazısı (static tag ile üstte kalır)
         self._status_id = self._cv.create_text(
-            self._cx, int(self._H * 0.82),
+            self._cx, int(self._H * 0.77),
             text="", font=("", 10), fill="#3D6A9E",
             anchor="center", tags="static")
 
         # Progress bar koordinatları (canvas üzerinde elle çizilir)
         self._bx = (self._W - 440) // 2
-        self._by = int(self._H * 0.90)
+        self._by = int(self._H * 0.88)
         self._bw = 440
         self._bh = 4
 
@@ -495,6 +495,12 @@ class PhotoTab(ctk.CTkFrame):
                                   hover_color=BTN_HOVER, font=fnt(14, True),
                                   state="disabled", command=self._start)
         self._btn.pack(fill="x", padx=18, pady=(12, 10))
+        self._btn.bind("<Enter>",
+                       lambda e, c=c3: c.configure(border_color=BTN_PRIMARY, border_width=2),
+                       add="+")
+        self._btn.bind("<Leave>",
+                       lambda e, c=c3: c.configure(border_color=CARD_BORDER, border_width=1),
+                       add="+")
 
         self._progress = ctk.CTkProgressBar(c3, mode="determinate",
                                             fg_color="#DCE8FF",
@@ -697,6 +703,12 @@ class MergeTab(ctk.CTkFrame):
                                         font=fnt(14, True), state="disabled",
                                         command=self._start_merge)
         self._btn_merge.pack(fill="x", padx=18, pady=(12, 10))
+        self._btn_merge.bind("<Enter>",
+                             lambda e, c=c3: c.configure(border_color=BTN_PRIMARY, border_width=2),
+                             add="+")
+        self._btn_merge.bind("<Leave>",
+                             lambda e, c=c3: c.configure(border_color=CARD_BORDER, border_width=1),
+                             add="+")
 
         self._progress = ctk.CTkProgressBar(c3, mode="determinate",
                                             fg_color="#DCE8FF",
