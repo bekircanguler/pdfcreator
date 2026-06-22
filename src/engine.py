@@ -447,14 +447,33 @@ def draw_page_number(c: canvas.Canvas, cur: int, total: int,
 
 def _draw_cell(c: canvas.Canvas, img_path: Path,
                x: float, y: float, w: float, h: float,
-               border_rgb: Tuple, cfg: Dict) -> None:
-    """Renders a single image into a cell with smart_place and photo frame."""
+               border_rgb: Tuple, cfg: Dict,
+               force_crop: Optional[bool] = None) -> None:
+    """Renders a single image into a cell.
+
+    force_crop=True  → always center-crop (kırp)
+    force_crop=False → always fit/letterbox (sığdır)
+    force_crop=None  → smart_place (auto based on AR mismatch)
+    """
     cw_px = round(w * 2)
     ch_px = round(h * 2)
     try:
         with Image.open(img_path) as pil_img:
             pil_img = ImageOps.exif_transpose(pil_img)
-            reader  = to_reader(smart_place(pil_img, cw_px, ch_px))
+            if force_crop is True:
+                placed = center_crop(pil_img, cw_px, ch_px)
+            elif force_crop is False:
+                # contain / letterbox
+                sw, sh = pil_img.size
+                scale  = min(cw_px / sw, ch_px / sh)
+                nw, nh = max(1, round(sw * scale)), max(1, round(sh * scale))
+                resized = pil_img.resize((nw, nh), Image.LANCZOS)
+                bg = Image.new("RGB", (cw_px, ch_px), _LETTERBOX_BG)
+                bg.paste(resized, ((cw_px - nw) // 2, (ch_px - nh) // 2))
+                placed = bg
+            else:
+                placed = smart_place(pil_img, cw_px, ch_px)
+            reader = to_reader(placed)
         c.drawImage(reader, x, y, width=w, height=h, preserveAspectRatio=False)
     except Exception as e:
         print(f"[HATA] {img_path.name}: {e}")
@@ -471,7 +490,8 @@ def _draw_cell(c: canvas.Canvas, img_path: Path,
 
 def draw_grid(c: canvas.Canvas, page_imgs: List[Path],
               cols: int, rows: int, cfg: Dict,
-              margin: float, hdr_h: float, gap: float) -> None:
+              margin: float, hdr_h: float, gap: float,
+              force_crop: Optional[bool] = None) -> None:
     """
     Lays out images in a fixed cols×rows grid.
     Partial last rows are horizontally centred.
@@ -491,7 +511,7 @@ def draw_grid(c: canvas.Canvas, page_imgs: List[Path],
         h_off = (cols - items_in_row) * (cell_w + gap) / 2 if items_in_row < cols else 0.0
         x = ax + col * (cell_w + gap) + h_off
         y = ay + (rows - 1 - row) * (cell_h + gap)
-        _draw_cell(c, img_path, x, y, cell_w, cell_h, border_rgb, cfg)
+        _draw_cell(c, img_path, x, y, cell_w, cell_h, border_rgb, cfg, force_crop)
 
 
 def _build_mixed_rows(portraits: List[Path], landscapes: List[Path],
@@ -553,7 +573,8 @@ def _build_mixed_rows(portraits: List[Path], landscapes: List[Path],
 
 
 def draw_mixed_grid(c: canvas.Canvas, page_imgs: List[Path], cfg: Dict,
-                    margin: float, hdr_h: float, gap: float) -> None:
+                    margin: float, hdr_h: float, gap: float,
+                    force_crop: Optional[bool] = None) -> None:
     """
     Mixed-orientation layout: portrait images go into tall rows (2 per row),
     landscape images go into wide rows (2 per row, or 1 full-width).
@@ -581,27 +602,26 @@ def draw_mixed_grid(c: canvas.Canvas, page_imgs: List[Path], cfg: Dict,
         y_bottom = y_cursor - row_h   # bottom edge of this row (reportlab coord)
 
         if kind == "portrait":
-            # 2 portrait cells side-by-side; single portrait is centred
             for i, img_path in enumerate(images):
                 x = ax + i * (cell_w + gap)
                 if n == 1:
-                    x = ax + (aw - cell_w) / 2   # centre single portrait
-                _draw_cell(c, img_path, x, y_bottom, cell_w, row_h, border_rgb, cfg)
+                    x = ax + (aw - cell_w) / 2
+                _draw_cell(c, img_path, x, y_bottom, cell_w, row_h, border_rgb, cfg, force_crop)
 
         elif kind == "landscape_half":
-            # 2 landscape cells side-by-side
             for i, img_path in enumerate(images):
                 x = ax + i * (cell_w + gap)
-                _draw_cell(c, img_path, x, y_bottom, cell_w, row_h, border_rgb, cfg)
+                _draw_cell(c, img_path, x, y_bottom, cell_w, row_h, border_rgb, cfg, force_crop)
 
         else:  # landscape_full
-            _draw_cell(c, images[0], ax, y_bottom, aw, row_h, border_rgb, cfg)
+            _draw_cell(c, images[0], ax, y_bottom, aw, row_h, border_rgb, cfg, force_crop)
 
         y_cursor -= row_h + gap
 
 
 def draw_landscape_rows(c: canvas.Canvas, page_imgs: List[Path], cfg: Dict,
-                        margin: float, hdr_h: float, gap: float) -> None:
+                        margin: float, hdr_h: float, gap: float,
+                        force_crop: Optional[bool] = None) -> None:
     """
     Landscape-only layout: each image occupies one full-width row.
 
@@ -615,17 +635,15 @@ def draw_landscape_rows(c: canvas.Canvas, page_imgs: List[Path], cfg: Dict,
     n = len(page_imgs)
 
     if n == 1:
-        # Single landscape: keep natural proportion (3:2), centre vertically
         cell_h = min(aw / 1.5, ah)
         y = margin + (ah - cell_h) / 2
-        _draw_cell(c, page_imgs[0], ax, y, aw, cell_h, border_rgb, cfg)
+        _draw_cell(c, page_imgs[0], ax, y, aw, cell_h, border_rgb, cfg, force_crop)
     else:
-        # Two landscapes: equal-height rows, top-to-bottom
         row_h = (ah - (n - 1) * gap) / n
         y_top = margin + ah
         for i, img_path in enumerate(page_imgs):
             y = y_top - (i + 1) * row_h - i * gap
-            _draw_cell(c, img_path, ax, y, aw, row_h, border_rgb, cfg)
+            _draw_cell(c, img_path, ax, y, aw, row_h, border_rgb, cfg, force_crop)
 
 
 # ---------------------------------------------------------------------------
@@ -634,16 +652,21 @@ def draw_landscape_rows(c: canvas.Canvas, page_imgs: List[Path], cfg: Dict,
 
 def _render_pdf(images: List[Path], cfg: Dict[str, Any], dest: Any) -> None:
     """Core render — dest can be a file path string or a BytesIO."""
-    # Ensure fonts are ready before measuring
     get_fonts()
     get_title_fonts()
 
-    margin = cfg["page_margin_mm"] * mm
-    gap    = cfg["grid_gap_mm"] * mm
-    hdr_h  = compute_header_height(cfg, margin)   # dynamic, based on title & subtitle
+    margin    = cfg["page_margin_mm"] * mm
+    gap       = cfg["grid_gap_mm"] * mm
+    hdr_h     = compute_header_height(cfg, margin)
+    fixed_grid = cfg.get("_fixed_grid")   # (cols, rows) or None
+    force_crop = cfg.get("_crop_mode")    # True/False/None
 
-    # Orientation-aware pagination: portrait pages first, then landscape pages (2/page).
-    pages = paginate_oriented(images)
+    if fixed_grid is not None:
+        cols, rows = fixed_grid
+        per_page   = cols * rows
+        pages      = [images[i: i + per_page] for i in range(0, len(images), per_page)]
+    else:
+        pages = paginate_oriented(images)
     total = len(pages)
 
     c = canvas.Canvas(dest, pagesize=A4)
@@ -653,15 +676,22 @@ def _render_pdf(images: List[Path], cfg: Dict[str, Any], dest: Any) -> None:
         draw_header(c, cfg, margin, hdr_h)
         draw_page_number(c, page_num, total, cfg, margin)
 
-        orientations = {get_orientation(p) for p in page_imgs}
-        if orientations == {"landscape"}:
-            draw_landscape_rows(c, page_imgs, cfg, margin, hdr_h, gap)
-        elif orientations == {"portrait"}:
-            cols, rows = grid_layout(page_imgs)
-            draw_grid(c, page_imgs, cols, rows, cfg, margin, hdr_h, gap)
+        if fixed_grid is not None:
+            cols, rows = fixed_grid
+            draw_grid(c, page_imgs, cols, rows, cfg, margin, hdr_h, gap,
+                      force_crop=force_crop)
         else:
-            # Fallback for any rare mixed page
-            draw_mixed_grid(c, page_imgs, cfg, margin, hdr_h, gap)
+            orientations = {get_orientation(p) for p in page_imgs}
+            if orientations == {"landscape"}:
+                draw_landscape_rows(c, page_imgs, cfg, margin, hdr_h, gap,
+                                    force_crop=force_crop)
+            elif orientations == {"portrait"}:
+                cols, rows = grid_layout(page_imgs)
+                draw_grid(c, page_imgs, cols, rows, cfg, margin, hdr_h, gap,
+                          force_crop=force_crop)
+            else:
+                draw_mixed_grid(c, page_imgs, cfg, margin, hdr_h, gap,
+                                force_crop=force_crop)
 
         if page_num < total:
             c.showPage()

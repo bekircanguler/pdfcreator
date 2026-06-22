@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install pillow reportlab flask pyinstaller customtkinter pypdf
+        run: pip install pillow reportlab pyinstaller customtkinter pypdf python-docx
 
       - name: Build EXE
         run: >
