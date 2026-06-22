@@ -1100,7 +1100,7 @@ class MergeModule(ctk.CTkFrame):
 class HelpDialog(ctk.CTkToplevel):
     _CONTENT = [
         ("📋  Genel İşleyiş", None),
-        (None, "Formu doldurup 'Word + PDF Üret' butonuna bastığınızda kayıt klasörü sorulur. Seçtiğiniz klasöre hem PDF hem Word (.docx) olarak kaydedilir."),
+        (None, "Formu doldurup 'Word + PDF Üret' butonuna bastığınızda hem PDF hem Word (.docx) otomatik olarak masaüstüne kaydedilir."),
 
         ("📝  1 — Temel Bilgiler", None),
         (None, "Konu  (zorunlu)\nBelgenin başlık konusu. Konu adından dosya adı otomatik oluşturulur."),
@@ -1124,7 +1124,7 @@ class HelpDialog(ctk.CTkToplevel):
         (None, "PDF'de fotoğraflardan hemen önce, sağa hizalı biçimde yer alır. Tarih bugünün tarihiyle otomatik doldurulur; GG.AA.YYYY formatında değiştirilebilir."),
 
         ("💡  İpuçları", None),
-        (None, "• Açıklamalar kutusu yazdıkça otomatik büyür (maks. 18 satır).\n• Maliyet tablosunda uzun alt kalem adları için satır yüksekliği otomatik genişler.\n• 'Word + PDF Üret' butonuna basıldığında önce kayıt klasörü sorulur — iptal etmek için pencereyi kapatabilirsiniz.\n• Konu alanı boş bırakılırsa belge üretilemez."),
+        (None, "• Açıklamalar kutusu yazdıkça otomatik büyür (maks. 18 satır).\n• Maliyet tablosunda uzun alt kalem adları için satır yüksekliği otomatik genişler.\n• Çıktılar otomatik olarak masaüstüne kaydedilir.\n• Konu ve Açıklamalar alanları boş bırakılırsa belge üretilemez."),
     ]
 
     def __init__(self, parent) -> None:
@@ -1200,6 +1200,7 @@ DISCIPLINES_DEFAULT = [
     "İnşaat İşleri",
     "Elektrik İşleri",
     "Mekanik / Tesisat İşleri",
+    "Saha Ekipleri",
 ]
 
 NOTE_LAYOUT_OPTIONS = [
@@ -2029,15 +2030,7 @@ class NoteModule(ctk.CTkFrame):
             self._acik_text.focus_set()
             return
 
-        # Kayıt klasörü seçimi
-        out_dir = filedialog.askdirectory(
-            title="Kayıt klasörünü seçin",
-            initialdir=str(Path.home() / "Desktop"))
-        if not out_dir:
-            return
-
         data = self._collect_data()
-        data["output_dir"] = out_dir
         self._gen_btn.configure(state="disabled", text="Üretiliyor...")
         self._clear_result()
         self._status_lbl.configure(text="Word ve PDF oluşturuluyor...", text_color=TEXT_MID)
