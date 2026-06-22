@@ -32,6 +32,8 @@ jobs:
           --windowed
           --name FotografPDFConverter
           --collect-data customtkinter
+          --collect-all docx
+          --hidden-import note_engine
           --add-data "config.json;."
           src/gui_app.py
 

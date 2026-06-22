@@ -78,8 +78,9 @@ def hex_rgb(hex_str: str) -> Tuple[float, float, float]:
 # Font registration — Unicode (Turkish) support
 # ---------------------------------------------------------------------------
 
-_BODY_FONTS:  Optional[Tuple[str, str]] = None   # (regular, bold) for subtitle / UI text
-_TITLE_FONTS: Optional[Tuple[str, str]] = None   # (regular, bold) for main title (TNR)
+_BODY_FONTS:   Optional[Tuple[str, str]] = None   # (regular, bold)
+_TITLE_FONTS:  Optional[Tuple[str, str]] = None   # (regular, bold) TNR
+_ITALIC_FONTS: Optional[Tuple[str, str]] = None   # (italic, bold-italic)
 
 _BODY_REGULAR = [
     "/Library/Fonts/Arial Unicode.ttf",
@@ -92,11 +93,26 @@ _BODY_REGULAR = [
 ]
 _BODY_BOLD = [
     "/Library/Fonts/Arial Bold.ttf",
-    "/Library/Fonts/Arial Unicode.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+]
+_BODY_ITALIC = [
+    "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+    "/Library/Fonts/Arial Italic.ttf",
+    "C:/Windows/Fonts/ariali.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf",
+]
+_BODY_BOLD_ITALIC = [
+    "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf",
+    "/Library/Fonts/Arial Bold Italic.ttf",
+    "C:/Windows/Fonts/arialbi.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-BoldOblique.ttf",
 ]
 _TIMES_REGULAR = [
     "/System/Library/Fonts/Supplemental/Times New Roman.ttf",   # macOS Supplemental
@@ -157,8 +173,29 @@ def get_title_fonts() -> Tuple[str, str]:
     if _TITLE_FONTS is None:
         _TITLE_FONTS = _register("TitleReg", "TitleBold",
                                  _TIMES_REGULAR, _TIMES_BOLD,
-                                 get_fonts())              # fall back to body font
+                                 get_fonts())
     return _TITLE_FONTS
+
+
+def get_italic_fonts() -> Tuple[str, str]:
+    """Returns (italic, bold-italic) font names. Falls back to regular/bold."""
+    global _ITALIC_FONTS
+    if _ITALIC_FONTS is None:
+        reg, bold = get_fonts()
+        italic_path    = _first_existing(_BODY_ITALIC)
+        bold_ital_path = _first_existing(_BODY_BOLD_ITALIC)
+        if italic_path:
+            try:
+                pdfmetrics.registerFont(TTFont("BodyItalic", italic_path))
+                pdfmetrics.registerFont(TTFont("BodyBoldItalic",
+                                               bold_ital_path or italic_path))
+                _ITALIC_FONTS = ("BodyItalic", "BodyBoldItalic")
+                print(f"[FONT] Italic: {Path(italic_path).name}")
+            except Exception:
+                _ITALIC_FONTS = (reg, bold)
+        else:
+            _ITALIC_FONTS = (reg, bold)
+    return _ITALIC_FONTS
 
 
 # ---------------------------------------------------------------------------

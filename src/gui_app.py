@@ -1192,6 +1192,7 @@ class NoteModule(ctk.CTkFrame):
         right.pack(side="right", fill="y", padx=(0, 14), pady=12)
         right.pack_propagate(False)
 
+        self._left_scroll = left
         self._build_form(left)
         self._build_photo_panel(right)
 
@@ -1211,25 +1212,100 @@ class NoteModule(ctk.CTkFrame):
                                          placeholder_text="Bilgi notunun konusu...")
         self._konu_entry.pack(side="left", fill="x", expand=True)
 
-        # Açıklamalar — tk.Text ile (CTkTextbox yerine: daha stabil)
+        # Açıklamalar — zengin metin editörü
         acik_row = ctk.CTkFrame(c1, fg_color="transparent")
         acik_row.pack(fill="x", padx=16, pady=(4, 4))
         ctk.CTkLabel(acik_row, text="Açıklamalar", font=fnt(11, True),
                      text_color=TEXT_DARK, width=110, anchor="nw").pack(
             side="left", anchor="n", pady=4)
-        txt_wrap = ctk.CTkFrame(acik_row, fg_color="#F8FAFF",
+
+        editor_col = ctk.CTkFrame(acik_row, fg_color="transparent")
+        editor_col.pack(side="left", fill="x", expand=True, pady=2)
+
+        # Toolbar
+        toolbar = ctk.CTkFrame(editor_col, fg_color="#EEF3FF",
+                               corner_radius=7, border_width=1, border_color=CARD_BORDER)
+        toolbar.pack(fill="x", pady=(0, 3))
+
+        # Metin kutusu
+        txt_wrap = ctk.CTkFrame(editor_col, fg_color="#F8FAFF",
                                 corner_radius=8, border_width=1, border_color=CARD_BORDER)
-        txt_wrap.pack(side="left", fill="x", expand=True, pady=2)
-        self._acik_text = tk.Text(txt_wrap, height=5, font=("Arial", 11),
+        txt_wrap.pack(fill="x", expand=True)
+        self._acik_text = tk.Text(txt_wrap, height=5, font=("Arial", 9),
                                    bg="#F8FAFF", relief="flat",
-                                   wrap="word", bd=0, highlightthickness=0)
+                                   wrap="word", bd=0, highlightthickness=0,
+                                   insertbackground=BTN_PRIMARY)
         self._acik_text.pack(fill="both", expand=True, padx=6, pady=4)
+
+        # Tag tanımlamaları
+        self._acik_text.tag_configure("bold",   font=("Arial", 9, "bold"))
+        self._acik_text.tag_configure("italic", font=("Arial", 9, "italic"))
+
+        # Biçimlendirme fonksiyonları
+        def _fmt_toggle(tag):
+            try:
+                s = self._acik_text.index("sel.first")
+                e = self._acik_text.index("sel.last")
+            except tk.TclError:
+                return
+            ranges = self._acik_text.tag_ranges(tag)
+            has_tag = any(
+                self._acik_text.compare(rs, "<", e) and
+                self._acik_text.compare(re_, ">", s)
+                for rs, re_ in zip(ranges[::2], ranges[1::2])
+            )
+            if has_tag:
+                self._acik_text.tag_remove(tag, s, e)
+            else:
+                self._acik_text.tag_add(tag, s, e)
+
+        def _toggle_bullet():
+            idx      = self._acik_text.index("insert")
+            line_no  = idx.split(".")[0]
+            ls       = f"{line_no}.0"
+            line_txt = self._acik_text.get(ls, f"{line_no}.end")
+            if line_txt.startswith("• "):
+                self._acik_text.delete(ls, f"{ls}+2c")
+            else:
+                self._acik_text.insert(ls, "• ")
+            return "break"
+
+        # Toolbar butonları
+        for label, cmd, kbind, bold_lbl in [
+            ("B",  lambda: _fmt_toggle("bold"),   "<Control-b>", True),
+            ("I",  lambda: _fmt_toggle("italic"), "<Control-i>", False),
+            ("•",  _toggle_bullet,                "<Control-l>", False),
+        ]:
+            ctk.CTkButton(toolbar, text=label, width=30, height=22,
+                          corner_radius=5, fg_color="#DCE8FF",
+                          hover_color=BTN_PRIMARY, text_color=BTN_PRIMARY,
+                          font=fnt(10, bold_lbl),
+                          command=cmd).pack(side="left", padx=(4, 0), pady=3)
+
+            def _bind_handler(e, _cmd=cmd):
+                _cmd()
+                return "break"
+            self._acik_text.bind(kbind, _bind_handler)
+
+        ctk.CTkLabel(toolbar, text="Ctrl+B  Ctrl+I  Ctrl+L",
+                     font=fnt(8), text_color=TEXT_LIGHT).pack(
+            side="right", padx=8)
 
         def _resize_acik(*_):
             lines = int(self._acik_text.index("end-1c").split(".")[0])
             self._acik_text.configure(height=max(5, min(18, lines)))
 
         self._acik_text.bind("<KeyRelease>", _resize_acik)
+
+        def _acik_wheel(event):
+            # Metin kutusu dolu değilse mouse tekerini dış frame'e ilet
+            top, bottom = self._acik_text.yview()
+            if top == 0.0 and bottom == 1.0:
+                self._left_scroll._parent_canvas.yview_scroll(
+                    -1 if event.delta > 0 else 1, "units")
+                return "break"
+
+        self._acik_text.bind("<MouseWheel>", _acik_wheel)
 
         # Talep Eden Birim
         talep_frame = ctk.CTkFrame(c1, fg_color="transparent")
@@ -1731,10 +1807,73 @@ class NoteModule(ctk.CTkFrame):
         self._ext_pdfs.pop(i)
         self._render_ext_list()
 
+    # ── Serializasyon ─────────────────────────────────────────────────────────
+    def _serialize_rich_text(self) -> list:
+        w       = self._acik_text
+        content = w.get("1.0", "end-1c")
+        if not content:
+            return []
+
+        lines_text = content.split("\n")
+
+        # Satır başlangıç offsetleri (mutlak karakter konumu)
+        line_starts = [0]
+        for lt in lines_text[:-1]:
+            line_starts.append(line_starts[-1] + len(lt) + 1)
+
+        def tk_to_abs(idx_str: str) -> int:
+            norm = w.index(idx_str)
+            ln, col = norm.split(".")
+            ln = int(ln) - 1  # 0-tabanlı
+            if ln >= len(line_starts):
+                return len(content)
+            return line_starts[ln] + int(col)
+
+        n = len(content)
+        bold_arr   = bytearray(n)
+        italic_arr = bytearray(n)
+
+        for tag, arr in [("bold", bold_arr), ("italic", italic_arr)]:
+            ranges = w.tag_ranges(tag)
+            for i in range(0, len(ranges), 2):
+                s = tk_to_abs(str(ranges[i]))
+                e = min(tk_to_abs(str(ranges[i + 1])), n)
+                for j in range(s, e):
+                    arr[j] = 1
+
+        result = []
+        pos = 0
+        for line_text in lines_text:
+            n_line    = len(line_text)
+            is_bullet = line_text.startswith("• ")
+            t_start   = 2 if is_bullet else 0
+
+            runs: list = []
+            if n_line > t_start:
+                j0    = pos + t_start
+                cur_b = bool(bold_arr[j0])
+                cur_i = bool(italic_arr[j0])
+                cur_t = ""
+                for j in range(j0, pos + n_line):
+                    b  = bool(bold_arr[j])
+                    it = bool(italic_arr[j])
+                    if b == cur_b and it == cur_i:
+                        cur_t += content[j]
+                    else:
+                        if cur_t:
+                            runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i})
+                        cur_b, cur_i, cur_t = b, it, content[j]
+                if cur_t:
+                    runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i})
+
+            result.append({"bullet": is_bullet, "runs": runs})
+            pos += n_line + 1
+
+        return result
+
     # ── Üretim ───────────────────────────────────────────────────────────────
     def _collect_data(self) -> dict:
-        konu = self._konu_entry.get().strip() or "Bilgi Notu"
-        acik = self._acik_text.get("1.0", "end").strip()
+        konu  = self._konu_entry.get().strip() or "Bilgi Notu"
         talep = None
         if self._talep_var.get():
             v = self._talep_entry.get().strip()
@@ -1780,9 +1919,9 @@ class NoteModule(ctk.CTkFrame):
 
         grid = NOTE_LAYOUT_GRID.get(self._note_layout_var.get())
         return {
-            "konu":         konu,
-            "aciklamalar":  acik,
-            "talep_eden":   talep,
+            "konu":             konu,
+            "aciklamalar_rich": self._serialize_rich_text(),
+            "talep_eden":       talep,
             "disciplines":  disciplines,
             "images":       list(self._images),
             "photo_grid":   grid,

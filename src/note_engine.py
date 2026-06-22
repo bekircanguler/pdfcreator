@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from engine import (
-    get_fonts, get_title_fonts, hex_rgb, wrap_text,
+    get_fonts, get_title_fonts, get_italic_fonts, hex_rgb, wrap_text,
     PAGE_W, PAGE_H,
 )
 from reportlab.pdfbase import pdfmetrics
@@ -101,7 +101,7 @@ class _PDFPainter:
         self.y = PAGE_H - MARGIN
         # Gövde metni: Arial Unicode — Türkçe karakter desteği garantili
         self._body_reg, self._body_bold = get_fonts()
-        # Ana başlık (BİLGİ NOTU): Times New Roman
+        self._body_italic, self._body_bold_italic = get_italic_fonts()
         self._title_reg, self._title_bold = get_title_fonts()
 
     def _new_page(self) -> None:
@@ -262,6 +262,96 @@ class _PDFPainter:
                                        self._body_reg, size)
                 self.y -= LINE_H_BODY
 
+    def _get_run_font(self, bold: bool, italic: bool) -> str:
+        if bold and italic:
+            return self._body_bold_italic
+        if bold:
+            return self._body_bold
+        if italic:
+            return self._body_italic
+        return self._body_reg
+
+    def body_text_rich(self, paragraphs: list, indent: float = 0) -> None:
+        """Yapılandırılmış zengin metin: [{bullet, runs:[{text, bold, italic}]}]"""
+        c = self._c
+        BULLET_INDENT = 14
+        SP_W = pdfmetrics.stringWidth(" ", self._body_reg, BODY_SIZE)
+
+        for para in paragraphs:
+            is_bullet = para.get("bullet", False)
+            runs      = para.get("runs", [])
+
+            if not runs or all(not r.get("text", "").strip() for r in runs):
+                self.y -= LINE_H_BODY // 2
+                continue
+
+            x_origin = MARGIN + indent + (BULLET_INDENT if is_bullet else 0)
+            eff_w    = CONTENT_W - indent - (BULLET_INDENT if is_bullet else 0)
+
+            # Kelime/boşluk token listesi
+            tokens: list = []
+            for run in runs:
+                fn = self._get_run_font(run.get("bold", False), run.get("italic", False))
+                parts = run["text"].split(" ")
+                for i, word in enumerate(parts):
+                    if i > 0:
+                        tokens.append({"t": " ", "fn": fn,
+                                       "w": pdfmetrics.stringWidth(" ", fn, BODY_SIZE),
+                                       "sp": True})
+                    if word:
+                        tokens.append({"t": word, "fn": fn,
+                                       "w": pdfmetrics.stringWidth(word, fn, BODY_SIZE),
+                                       "sp": False})
+
+            # Satırlara yerleştir
+            lines: list = []
+            cur: list   = []
+            cur_w       = 0.0
+            for tok in tokens:
+                if tok["w"] + cur_w > eff_w and cur and not tok["sp"]:
+                    while cur and cur[-1]["sp"]:
+                        cur.pop()
+                    if cur:
+                        lines.append(cur)
+                    cur   = [tok]
+                    cur_w = tok["w"]
+                else:
+                    cur.append(tok)
+                    cur_w += tok["w"]
+            while cur and cur[-1]["sp"]:
+                cur.pop()
+            if cur:
+                lines.append(cur)
+
+            # Çiz
+            for li, line_toks in enumerate(lines):
+                self._ensure(LINE_H_BODY)
+                is_last = (li == len(lines) - 1)
+                n_sp    = sum(1 for t in line_toks if t["sp"])
+                word_w  = sum(t["w"] for t in line_toks if not t["sp"])
+
+                if not is_last and n_sp > 0:
+                    each_sp = (eff_w - word_w) / n_sp
+                else:
+                    each_sp = SP_W
+
+                if is_bullet and li == 0:
+                    c.setFont(self._body_reg, BODY_SIZE)
+                    c.setFillColorRGB(0.18, 0.18, 0.18)
+                    c.drawString(MARGIN + indent, self.y, "•")
+
+                x = x_origin
+                for tok in line_toks:
+                    c.setFillColorRGB(0.18, 0.18, 0.18)
+                    if tok["sp"]:
+                        x += each_sp
+                    else:
+                        c.setFont(tok["fn"], BODY_SIZE)
+                        c.drawString(x, self.y, tok["t"])
+                        x += tok["w"]
+
+                self.y -= LINE_H_BODY
+
     def spacer(self, h: float = 6) -> None:
         self._ensure(h)
         self.y -= h
@@ -282,15 +372,16 @@ class _PDFPainter:
         headers = ["Disiplin / Kalem", "KDV Hariç Tutar", "KDV Dahil Tutar (%20)"]
         row_h = 18
 
-        def _draw_row_bg(row_idx, alt=False):
+        def _draw_row_bg(row_idx, alt=False, h=None):
+            rh = h if h is not None else row_h
             if alt:
                 bg = hex_rgb("#F8FBFF") if row_idx % 2 == 0 else (1, 1, 1)
             else:
                 bg = hex_rgb("#F0F6FF") if row_idx % 2 == 0 else (1, 1, 1)
-            self._rect_fill(MARGIN, self.y - row_h + 2, CONTENT_W, row_h, bg)
+            self._rect_fill(MARGIN, self.y - rh + 2, CONTENT_W, rh, bg)
             c.setStrokeColorRGB(0.80, 0.85, 0.92)
             c.setLineWidth(0.3)
-            c.rect(MARGIN, self.y - row_h + 2, CONTENT_W, row_h, fill=0, stroke=1)
+            c.rect(MARGIN, self.y - rh + 2, CONTENT_W, rh, fill=0, stroke=1)
 
         # Başlık satırı
         self._ensure(row_h + 4)
@@ -326,18 +417,32 @@ class _PDFPainter:
                 self.y -= row_h
                 row_idx += 1
 
-                # Alt kalem satırları (girintili)
+                # Alt kalem satırları (girintili, dinamik yükseklik)
                 for ak in alt_kalemler:
-                    self._ensure(row_h + 2)
-                    _draw_row_bg(row_idx, alt=True)
+                    ak_label  = "↳  " + ak.get("ad", "")
+                    ak_lines  = wrap_text(ak_label, self._body_reg,
+                                          BODY_SIZE - 1, col_w[0] - 18)
+                    n_ak      = max(1, len(ak_lines))
+                    ak_row_h  = max(row_h, n_ak * 13 + 8)
+
+                    self._ensure(ak_row_h + 2)
+                    _draw_row_bg(row_idx, alt=True, h=ak_row_h)
+
                     c.setFont(self._body_reg, BODY_SIZE - 1)
                     c.setFillColorRGB(0.18, 0.18, 0.18)
-                    c.drawString(MARGIN + 14, self.y - 12, "↳  " + ak.get("ad", ""))
+                    # Dikey ortalama
+                    text_h      = n_ak * 13
+                    first_base  = self.y - (ak_row_h - text_h) / 2 - 11
+                    for li, ln in enumerate(ak_lines):
+                        c.drawString(MARGIN + 14, first_base - li * 13, ln)
+
+                    mid_y = self.y - ak_row_h / 2 - 4
                     x = MARGIN + col_w[0]
-                    c.drawString(x + 4, self.y - 12, ak.get("maliyet_hariç", ""))
+                    c.drawString(x + 4, mid_y, ak.get("maliyet_hariç", ""))
                     x += col_w[1]
-                    c.drawString(x + 4, self.y - 12, ak.get("maliyet_dahil", ""))
-                    self.y -= row_h
+                    c.drawString(x + 4, mid_y, ak.get("maliyet_dahil", ""))
+
+                    self.y -= ak_row_h
                     row_idx += 1
             else:
                 # Normal disiplin satırı
@@ -528,9 +633,10 @@ def _append_external_pdfs(main_buf: io.BytesIO,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def build_note(data: Dict[str, Any]) -> Dict[str, str]:
-    konu        = data.get("konu", "Bilgi Notu")
-    aciklamalar = data.get("aciklamalar", "")
-    talep_eden  = data.get("talep_eden")
+    konu             = data.get("konu", "Bilgi Notu")
+    aciklamalar_rich = data.get("aciklamalar_rich", [])
+    aciklamalar      = data.get("aciklamalar", "")   # düz metin geri uyumluluk
+    talep_eden       = data.get("talep_eden")
     disciplines = data.get("disciplines", [])
     images      = [Path(p) for p in data.get("images", [])]
     photo_grid  = data.get("photo_grid")
@@ -559,7 +665,11 @@ def build_note(data: Dict[str, Any]) -> Dict[str, str]:
         p.body_text(talep_eden, indent=4)
         p.spacer(8)
 
-    if aciklamalar:
+    if aciklamalar_rich:
+        p.section_title("Açıklamalar")
+        p.body_text_rich(aciklamalar_rich, indent=4)
+        p.spacer(10)
+    elif aciklamalar:
         p.section_title("Açıklamalar")
         p.body_text(aciklamalar, indent=4)
         p.spacer(10)
@@ -567,12 +677,13 @@ def build_note(data: Dict[str, Any]) -> Dict[str, str]:
     if disciplines:
         p.draw_cost_table(disciplines)
 
+    p.draw_date_signature(tarih, duzenleyen)
+
     p.draw_photos(images, grid=photo_grid, crop=photo_crop)
 
     if _need_saha_note(disciplines):
         p.draw_footer_note(_SAHA_NOTE)
 
-    p.draw_date_signature(tarih, duzenleyen)
     p.finalize()
 
     # Sayfa numaraları (Sayfa X / Y) — tüm sayfalar bilinince eklenir
@@ -600,11 +711,12 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
 
-    konu        = data.get("konu", "Bilgi Notu")
-    aciklamalar = data.get("aciklamalar", "")
-    talep_eden  = data.get("talep_eden")
-    disciplines = data.get("disciplines", [])
-    images      = [Path(p) for p in data.get("images", [])]
+    konu             = data.get("konu", "Bilgi Notu")
+    aciklamalar_rich = data.get("aciklamalar_rich", [])
+    aciklamalar      = data.get("aciklamalar", "")
+    talep_eden       = data.get("talep_eden")
+    disciplines      = data.get("disciplines", [])
+    images           = [Path(p) for p in data.get("images", [])]
 
     doc = Document()
 
@@ -697,7 +809,30 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
         _body(talep_eden)
 
     # ── Açıklamalar ───────────────────────────────────────────────────────────
-    if aciklamalar:
+    if aciklamalar_rich:
+        _section_heading("Açıklamalar")
+        for para in aciklamalar_rich:
+            runs_data = [r for r in para.get("runs", []) if r.get("text")]
+            if not runs_data and not para.get("bullet"):
+                # Boş paragraf → küçük boşluk olarak ekle
+                sp = doc.add_paragraph()
+                sp.paragraph_format.space_after = Pt(4)
+                continue
+            p_doc = doc.add_paragraph()
+            p_doc.paragraph_format.space_after  = Pt(3)
+            p_doc.paragraph_format.space_before = Pt(0)
+            p_doc.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            if para.get("bullet"):
+                p_doc.paragraph_format.left_indent    = Cm(0.5)
+                p_doc.paragraph_format.first_line_indent = Cm(-0.5)
+                bullet_run = p_doc.add_run("• ")
+                _set_run_font(bullet_run, size=11)
+            for rd in runs_data:
+                r = p_doc.add_run(rd["text"])
+                _set_run_font(r, size=11,
+                              bold=rd.get("bold", False),
+                              italic=rd.get("italic", False))
+    elif aciklamalar:
         _section_heading("Açıklamalar")
         _body(aciklamalar)
 
@@ -724,6 +859,13 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
         tbl.style = "Table Grid"
 
         from docx.oxml import OxmlElement as _OE
+        from docx.shared import Cm as _Cm
+
+        # Sütun genişlikleri: sayfanın kullanılabilir genişliği ~16cm
+        col_widths = [_Cm(7.5), _Cm(4.25), _Cm(4.25)]
+        for row in tbl.rows:
+            for i, cell in enumerate(row.cells):
+                cell.width = col_widths[i]
 
         def _dark_cell(cell):
             tc = cell._tc
@@ -802,6 +944,20 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
                 _set_run_font(run, size=11, bold=True)
                 _light_cell(cells[2])
 
+    # ── Tarih + Düzenleyen (fotoğraflardan önce) ─────────────────────────────
+    doc.add_paragraph()
+    clr = RGBColor(0x33, 0x33, 0x33)
+    if duzenleyen:
+        p_duz = doc.add_paragraph()
+        p_duz.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run_duz = p_duz.add_run(f"Düzenleyen: {duzenleyen}")
+        _set_run_font(run_duz, size=12, color=clr)
+        p_duz.paragraph_format.space_after = Pt(0)
+    p_tar = doc.add_paragraph()
+    p_tar.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run_tar = p_tar.add_run(f"Tarih: {tarih}")
+    _set_run_font(run_tar, size=12, color=clr)
+
     # ── Fotoğraflar ───────────────────────────────────────────────────────────
     if images:
         _section_heading("Fotoğraflar")
@@ -825,20 +981,6 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
         run = p.add_run(_SAHA_NOTE)
         _set_run_font(run, size=10, italic=True,
                       color=RGBColor(0x92, 0x40, 0x0E))
-
-    # ── Tarih + Düzenleyen ────────────────────────────────────────────────────
-    doc.add_paragraph()
-    clr = RGBColor(0x33, 0x33, 0x33)
-    if duzenleyen:
-        p_duz = doc.add_paragraph()
-        p_duz.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        run_duz = p_duz.add_run(f"Düzenleyen: {duzenleyen}")
-        _set_run_font(run_duz, size=12, color=clr)
-        p_duz.paragraph_format.space_after = Pt(0)
-    p_tar = doc.add_paragraph()
-    p_tar.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run_tar = p_tar.add_run(f"Tarih: {tarih}")
-    _set_run_font(run_tar, size=12, color=clr)
 
     docx_path = str(out_dir / (fname_base + ".docx"))
     doc.save(docx_path)
