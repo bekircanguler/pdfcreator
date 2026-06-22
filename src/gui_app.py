@@ -2030,7 +2030,15 @@ class NoteModule(ctk.CTkFrame):
             self._acik_text.focus_set()
             return
 
-        data = self._collect_data()
+        try:
+            data = self._collect_data()
+        except Exception:
+            import traceback
+            tb = traceback.format_exc()
+            print(tb)
+            messagebox.showerror("Veri Hatası", tb)
+            return
+
         self._gen_btn.configure(state="disabled", text="Üretiliyor...")
         self._clear_result()
         self._status_lbl.configure(text="Word ve PDF oluşturuluyor...", text_color=TEXT_MID)

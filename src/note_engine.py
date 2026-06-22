@@ -299,9 +299,23 @@ class _PDFPainter:
                                        "w": pdfmetrics.stringWidth(" ", fn, BODY_SIZE),
                                        "sp": True})
                     if word:
-                        tokens.append({"t": word, "fn": fn,
-                                       "w": pdfmetrics.stringWidth(word, fn, BODY_SIZE),
-                                       "sp": False})
+                        word_w = pdfmetrics.stringWidth(word, fn, BODY_SIZE)
+                        if word_w <= eff_w:
+                            tokens.append({"t": word, "fn": fn, "w": word_w, "sp": False})
+                        else:
+                            # Satır genişliğini aşan kelime → karakter bazında böl
+                            chunk, chunk_w = "", 0.0
+                            for ch in word:
+                                ch_w = pdfmetrics.stringWidth(ch, fn, BODY_SIZE)
+                                if chunk_w + ch_w > eff_w and chunk:
+                                    tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False})
+                                    tokens.append({"t": " ", "fn": fn, "w": 0.0, "sp": True})
+                                    chunk, chunk_w = ch, ch_w
+                                else:
+                                    chunk += ch
+                                    chunk_w += ch_w
+                            if chunk:
+                                tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False})
 
             # Satırlara yerleştir
             lines: list = []
