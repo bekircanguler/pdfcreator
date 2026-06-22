@@ -646,7 +646,8 @@ def build_note(data: Dict[str, Any]) -> Dict[str, str]:
     duzenleyen  = data.get("duzenleyen", "")
     fname_base  = _safe_fname(konu)
 
-    out_dir = Path.home() / "Desktop"
+    out_dir_raw = data.get("output_dir", "")
+    out_dir = Path(out_dir_raw).expanduser() if out_dir_raw else Path.home() / "Desktop"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── PDF ───────────────────────────────────────────────────────────────────

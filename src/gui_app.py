@@ -318,10 +318,10 @@ class SplashScreen(tk.Toplevel):
     _RMIN, _RMAX = 44, 80
 
     _STATUSES = [
-        (0.9, "Modüller yükleniyor..."),
-        (2.4, "Yazı tipleri hazırlanıyor..."),
-        (3.8, "Arayüz oluşturuluyor..."),
-        (5.4, "Hazır!"),
+        (0.4, "Modüller yükleniyor..."),
+        (1.0, "Yazı tipleri hazırlanıyor..."),
+        (1.8, "Arayüz oluşturuluyor..."),
+        (2.5, "Hazır!"),
     ]
 
     def __init__(self, master, on_done) -> None:
@@ -389,18 +389,18 @@ class SplashScreen(tk.Toplevel):
         if self._done:
             return
         elapsed = time.monotonic() - self._t0
-        if elapsed < 0.7:
-            self.wm_attributes("-alpha", elapsed / 0.7)
-        prog = max(0.0, min(1.0, (elapsed - 0.8) / 5.2))
+        if elapsed < 0.35:
+            self.wm_attributes("-alpha", elapsed / 0.35)
+        prog = max(0.0, min(1.0, (elapsed - 0.35) / 2.65))
         msg = ""
         for t_trig, text in self._STATUSES:
             if elapsed >= t_trig:
                 msg = text
         self._cv.itemconfigure(self._status_id, text=msg)
         self._draw(elapsed, prog)
-        if elapsed >= 6.1:
-            self.wm_attributes("-alpha", max(0.0, 1.0 - (elapsed - 6.1) / 0.7))
-        if elapsed >= 6.8:
+        if elapsed >= 3.0:
+            self.wm_attributes("-alpha", max(0.0, 1.0 - (elapsed - 3.0) / 0.5))
+        if elapsed >= 3.5:
             self._done = True
             self.destroy()
             self._on_done()
@@ -1095,6 +1095,82 @@ class MergeModule(ctk.CTkFrame):
             w.destroy()
 
 
+# ─── Kullanım Kılavuzu ───────────────────────────────────────────────────────
+
+class HelpDialog(ctk.CTkToplevel):
+    _CONTENT = [
+        ("📋  Genel İşleyiş", None),
+        (None, "Formu doldurup 'Word + PDF Üret' butonuna bastığınızda kayıt klasörü sorulur. Seçtiğiniz klasöre hem PDF hem Word (.docx) olarak kaydedilir."),
+
+        ("📝  1 — Temel Bilgiler", None),
+        (None, "Konu  (zorunlu)\nBelgenin başlık konusu. Konu adından dosya adı otomatik oluşturulur."),
+        (None, "Açıklamalar  (zorunlu)\nSaha ve teknik detayların yazıldığı alan. Metni seçip araç çubuğundaki\n  B  →  Kalın  |  I  →  İtalik  |  •  →  Madde işareti\nile biçimlendirilebilir. Kısayollar: Ctrl+B, Ctrl+I, Ctrl+L"),
+        (None, "Talep Eden Birim  (isteğe bağlı)\nTalebi oluşturan birimin adı. İşaretlenmezse belgede yer almaz."),
+
+        ("💰  2 — Maliyet ve Kapsam", None),
+        (None, "Disiplin Seçimi\nListeden ilgili disiplini işaretleyin — detay alanı açılır. Birden fazla disiplin seçilebilir."),
+        (None, "KDV Hariç Tutar\nOndalık için virgül kullanın:  150.000,00\nKDV Dahil tutar (%20) otomatik hesaplanır ve tabloda gösterilir."),
+        (None, "Alt Kalemler\nBir disiplin içinde birden fazla iş kalemi varsa '+ Alt Kalem Ekle' butonuyla ayrı satırlar oluşturabilirsiniz. Alt kalemler girilince ana tutar otomatik toplanır; elle düzenlenemez hâle gelir."),
+        (None, "Özel Disiplin\nListede olmayan bir kalem için en alttaki 'Yeni Disiplin' kutusuna yazıp Ekle'ye basın veya Enter'a basın."),
+        (None, "Toplam Satırı\nBirden fazla disiplin seçildiğinde tablonun altında TOPLAM satırı otomatik eklenir."),
+
+        ("📷  3 — Fotoğraflar", None),
+        (None, "Klasör seçince içindeki tüm JPG/PNG dosyalar eklenir. Sağ paneldeki önizleme fotoğraf düzenini anlık gösterir. Düzen açılır menüsünden sayfa başına fotoğraf adedi belirlenebilir."),
+
+        ("📎  4 — Harici PDF Ekleri", None),
+        (None, "Harita, vaziyet planı, keşif cetveli gibi hazır belgeler son sayfalara eklenir. '+ PDF Ekle' ile seçilen dosyalar sıraya göre eklenir."),
+
+        ("📅  5 — Tarih ve Düzenleyen", None),
+        (None, "PDF'de fotoğraflardan hemen önce, sağa hizalı biçimde yer alır. Tarih bugünün tarihiyle otomatik doldurulur; GG.AA.YYYY formatında değiştirilebilir."),
+
+        ("💡  İpuçları", None),
+        (None, "• Açıklamalar kutusu yazdıkça otomatik büyür (maks. 18 satır).\n• Maliyet tablosunda uzun alt kalem adları için satır yüksekliği otomatik genişler.\n• 'Word + PDF Üret' butonuna basıldığında önce kayıt klasörü sorulur — iptal etmek için pencereyi kapatabilirsiniz.\n• Konu alanı boş bırakılırsa belge üretilemez."),
+    ]
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.title("Kullanım Kılavuzu")
+        W, H = 640, 560
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{W}x{H}+{(sw-W)//2}+{(sh-H)//2}")
+        self.resizable(False, False)
+        self.grab_set()
+        self.configure(fg_color=PAGE_BG)
+        self._build()
+
+    def _build(self) -> None:
+        hdr = ctk.CTkFrame(self, fg_color=HEADER_BG, corner_radius=0, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(hdr, text="Bilgi Notu — Kullanım Kılavuzu",
+                     font=fnt(15, True), text_color="white").place(
+            relx=0.5, rely=0.5, anchor="center")
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color=PAGE_BG, corner_radius=0)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(10, 0))
+
+        for heading, body in self._CONTENT:
+            if heading:
+                ctk.CTkLabel(scroll, text=heading, font=fnt(12, True),
+                             text_color=BTN_PRIMARY, anchor="w").pack(
+                    fill="x", pady=(14, 2))
+                ctk.CTkFrame(scroll, fg_color=BTN_PRIMARY, height=1).pack(
+                    fill="x", pady=(0, 5))
+            else:
+                card = ctk.CTkFrame(scroll, fg_color=CARD_BG, corner_radius=8,
+                                    border_width=1, border_color=CARD_BORDER)
+                card.pack(fill="x", pady=(0, 5))
+                ctk.CTkLabel(card, text=body, font=fnt(10),
+                             text_color=TEXT_DARK, anchor="nw",
+                             justify="left", wraplength=570).pack(
+                    padx=12, pady=8, anchor="w")
+
+        ctk.CTkButton(self, text="Kapat", height=38, corner_radius=19,
+                      fg_color=BTN_PRIMARY, hover_color=BTN_HOVER,
+                      font=fnt(12, True), command=self.destroy).pack(
+            pady=12, padx=80, fill="x")
+
+
 # ─── Bilgi Notu Modülü ───────────────────────────────────────────────────────
 
 # ─── Maliyet yardımcıları ────────────────────────────────────────────────────
@@ -1197,7 +1273,18 @@ class NoteModule(ctk.CTkFrame):
         self._build_photo_panel(right)
 
     # ── Sol form ─────────────────────────────────────────────────────────────
+    def _show_help(self) -> None:
+        HelpDialog(self)
+
     def _build_form(self, parent) -> None:
+        # Kılavuz butonu
+        _hr = ctk.CTkFrame(parent, fg_color="transparent")
+        _hr.pack(fill="x", padx=16, pady=(6, 2))
+        ctk.CTkButton(_hr, text="ℹ  Kullanım Kılavuzu", width=170, height=26,
+                      corner_radius=13, fg_color="#EEF3FF", hover_color="#DCE8FF",
+                      text_color=BTN_PRIMARY, font=fnt(10),
+                      command=self._show_help).pack(side="right")
+
         # ── Kart 1: Temel Bilgiler ────────────────────────────────────────
         c1 = make_card(parent)
         step_header(c1, "1", "Temel Bilgiler")
@@ -1932,7 +2019,25 @@ class NoteModule(ctk.CTkFrame):
         }
 
     def _start(self) -> None:
+        # Doğrulama
+        if not self._konu_entry.get().strip():
+            messagebox.showwarning("Eksik Bilgi", "Konu alanı boş bırakılamaz.")
+            self._konu_entry.focus_set()
+            return
+        if not self._acik_text.get("1.0", "end-1c").strip():
+            messagebox.showwarning("Eksik Bilgi", "Açıklamalar alanı boş bırakılamaz.")
+            self._acik_text.focus_set()
+            return
+
+        # Kayıt klasörü seçimi
+        out_dir = filedialog.askdirectory(
+            title="Kayıt klasörünü seçin",
+            initialdir=str(Path.home() / "Desktop"))
+        if not out_dir:
+            return
+
         data = self._collect_data()
+        data["output_dir"] = out_dir
         self._gen_btn.configure(state="disabled", text="Üretiliyor...")
         self._clear_result()
         self._status_lbl.configure(text="Word ve PDF oluşturuluyor...", text_color=TEXT_MID)
