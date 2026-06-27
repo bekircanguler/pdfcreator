@@ -377,13 +377,12 @@ class _PDFPainter:
         self.section_title("Maliyet Tablosu")
 
         c = self._c
-        # Sütun genişlikleri: Disiplin | KDV Hariç | KDV Dahil (%20)
+        # Sütun genişlikleri: Disiplin | KDV Hariç
         col_w = [
-            CONTENT_W * 0.44,
-            CONTENT_W * 0.28,
-            CONTENT_W * 0.28,
+            CONTENT_W * 0.60,
+            CONTENT_W * 0.40,
         ]
-        headers = ["Disiplin / Kalem", "KDV Hariç Tutar", "KDV Dahil Tutar (%20)"]
+        headers = ["Disiplin / Kalem", "KDV Hariç Tutar"]
         row_h = 18
 
         def _draw_row_bg(row_idx, alt=False, h=None):
@@ -453,8 +452,6 @@ class _PDFPainter:
                     mid_y = self.y - ak_row_h / 2 - 4
                     x = MARGIN + col_w[0]
                     c.drawString(x + 4, mid_y, ak.get("maliyet_hariç", ""))
-                    x += col_w[1]
-                    c.drawString(x + 4, mid_y, ak.get("maliyet_dahil", ""))
 
                     self.y -= ak_row_h
                     row_idx += 1
@@ -463,7 +460,7 @@ class _PDFPainter:
                 self._ensure(row_h + 2)
                 _draw_row_bg(row_idx)
                 x = MARGIN
-                for i, val in enumerate([disc.get("name", ""), hariç, dahil]):
+                for i, val in enumerate([disc.get("name", ""), hariç]):
                     c.setFont(self._body_bold if i == 0 else self._body_reg, BODY_SIZE - 1)
                     c.setFillColorRGB(0.1, 0.1, 0.1)
                     c.drawString(x + 4, self.y - 12, val)
@@ -471,8 +468,7 @@ class _PDFPainter:
                 self.y -= row_h
                 row_idx += 1
 
-        # Toplam satırı (birden fazla disiplin varsa)
-        if len(disciplines) > 1 and total_hariç_val:
+        def _draw_total_row(label, value):
             self._ensure(row_h + 2)
             self._rect_fill(MARGIN, self.y - row_h + 2, CONTENT_W, row_h, hex_rgb("#E8F0FE"))
             c.setStrokeColorRGB(0.60, 0.70, 0.85)
@@ -480,12 +476,17 @@ class _PDFPainter:
             c.rect(MARGIN, self.y - row_h + 2, CONTENT_W, row_h, fill=0, stroke=1)
             c.setFont(self._body_bold, BODY_SIZE - 1)
             c.setFillColorRGB(*hex_rgb("#1A2E4A"))
-            c.drawString(MARGIN + 4, self.y - 12, "TOPLAM")
-            x = MARGIN + col_w[0]
-            c.drawString(x + 4, self.y - 12, _fmt_tl(total_hariç_val))
-            x += col_w[1]
-            c.drawString(x + 4, self.y - 12, _fmt_tl(total_dahil_val))
+            c.drawString(MARGIN + 4, self.y - 12, label)
+            c.drawString(MARGIN + col_w[0] + 4, self.y - 12, value)
             self.y -= row_h
+
+        # Birden fazla disiplin varsa KDV Hariç toplam satırı
+        if len(disciplines) > 1 and total_hariç_val:
+            _draw_total_row("TOPLAM KDV Hariç", _fmt_tl(total_hariç_val))
+
+        # Her zaman KDV Dahil toplam satırı
+        if total_dahil_val:
+            _draw_total_row("TOPLAM KDV Dahil (%20)", _fmt_tl(total_dahil_val))
 
         self.spacer(8)
 
@@ -854,7 +855,7 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     # ── Maliyet Tablosu ───────────────────────────────────────────────────────
     if disciplines:
         _section_heading("Maliyet Tablosu")
-        col_headers = ["Disiplin / Kalem", "KDV Hariç Tutar", "KDV Dahil Tutar (%20)"]
+        col_headers = ["Disiplin / Kalem", "KDV Hariç Tutar"]
 
         all_rows = []
         for disc in disciplines:
@@ -868,16 +869,18 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
         total_h = sum(d.get("maliyet_hariç_val", 0.0) for d in disciplines)
         total_d = sum(d.get("maliyet_dahil_val", 0.0) for d in disciplines)
         if len(disciplines) > 1 and total_h:
-            all_rows.append(("total", total_h, total_d))
+            all_rows.append(("total_h", total_h))
+        if total_d:
+            all_rows.append(("total_d", total_d))
 
-        tbl = doc.add_table(rows=1 + len(all_rows), cols=3)
+        tbl = doc.add_table(rows=1 + len(all_rows), cols=2)
         tbl.style = "Table Grid"
 
         from docx.oxml import OxmlElement as _OE
         from docx.shared import Cm as _Cm
 
         # Sütun genişlikleri: sayfanın kullanılabilir genişliği ~16cm
-        col_widths = [_Cm(7.5), _Cm(4.25), _Cm(4.25)]
+        col_widths = [_Cm(9.5), _Cm(6.5)]
         for row in tbl.rows:
             for i, cell in enumerate(row.cells):
                 cell.width = col_widths[i]
@@ -920,17 +923,13 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
                 cells[1].text = ""
                 run = cells[1].paragraphs[0].add_run(disc.get("maliyet_hariç", ""))
                 _set_run_font(run, size=11)
-                cells[2].text = ""
-                run = cells[2].paragraphs[0].add_run(disc.get("maliyet_dahil", ""))
-                _set_run_font(run, size=11)
 
             elif rtype == "disc_head":
                 disc = row_data[1]
                 cells[0].text = ""
                 run = cells[0].paragraphs[0].add_run(disc.get("name", ""))
                 _set_run_font(run, size=11, bold=True)
-                for j in [1, 2]:
-                    cells[j].text = ""
+                cells[1].text = ""
 
             elif rtype == "sub":
                 ak = row_data[1]
@@ -940,24 +939,28 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
                 cells[1].text = ""
                 run = cells[1].paragraphs[0].add_run(ak.get("maliyet_hariç", ""))
                 _set_run_font(run, size=11)
-                cells[2].text = ""
-                run = cells[2].paragraphs[0].add_run(ak.get("maliyet_dahil", ""))
-                _set_run_font(run, size=11)
 
-            elif rtype == "total":
-                _, th, td = row_data
+            elif rtype == "total_h":
+                _, th = row_data
                 cells[0].text = ""
-                run = cells[0].paragraphs[0].add_run("TOPLAM")
+                run = cells[0].paragraphs[0].add_run("TOPLAM KDV Hariç")
                 _set_run_font(run, size=11, bold=True, color=RGBColor(0x1A, 0x2E, 0x4A))
                 _light_cell(cells[0])
                 cells[1].text = ""
                 run = cells[1].paragraphs[0].add_run(_fmt_tl(th))
                 _set_run_font(run, size=11, bold=True)
                 _light_cell(cells[1])
-                cells[2].text = ""
-                run = cells[2].paragraphs[0].add_run(_fmt_tl(td))
+
+            elif rtype == "total_d":
+                _, td = row_data
+                cells[0].text = ""
+                run = cells[0].paragraphs[0].add_run("TOPLAM KDV Dahil (%20)")
+                _set_run_font(run, size=11, bold=True, color=RGBColor(0x1A, 0x2E, 0x4A))
+                _light_cell(cells[0])
+                cells[1].text = ""
+                run = cells[1].paragraphs[0].add_run(_fmt_tl(td))
                 _set_run_font(run, size=11, bold=True)
-                _light_cell(cells[2])
+                _light_cell(cells[1])
 
     # ── Tarih + Düzenleyen (fotoğraflardan önce) ─────────────────────────────
     doc.add_paragraph()

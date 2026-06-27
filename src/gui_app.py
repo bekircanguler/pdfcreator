@@ -1097,6 +1097,140 @@ class MergeModule(ctk.CTkFrame):
 
 # ─── Kullanım Kılavuzu ───────────────────────────────────────────────────────
 
+class AciklamaEditDialog(ctk.CTkToplevel):
+    """Açıklamalar alanı için büyük zengin metin editörü modal penceresi."""
+
+    def __init__(self, module, initial_data: list) -> None:
+        super().__init__(module)
+        self._module = module
+        W, H = 760, 540
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
+        self.title("Açıklamalar — Düzenle")
+        self.resizable(True, True)
+        self.minsize(600, 400)
+        self.configure(fg_color=PAGE_BG)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self._build()
+        module._load_rich_text(self._text, initial_data)
+        self._text.mark_set("insert", "1.0")
+        self._text.focus_set()
+
+    def _build(self) -> None:
+        # Başlık
+        hdr = ctk.CTkFrame(self, fg_color=HEADER_BG, corner_radius=0, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(hdr, text="Açıklamalar — Düzenle",
+                     font=fnt(15, True), text_color="white").place(
+            relx=0.5, rely=0.5, anchor="center")
+
+        # Toolbar
+        toolbar = ctk.CTkFrame(self, fg_color="#EEF3FF",
+                               corner_radius=0, border_width=0)
+        toolbar.pack(fill="x", padx=12, pady=(10, 0))
+        inner_tb = ctk.CTkFrame(toolbar, fg_color="#EEF3FF",
+                                corner_radius=7, border_width=1,
+                                border_color=CARD_BORDER)
+        inner_tb.pack(fill="x")
+
+        # Metin alanı
+        txt_container = ctk.CTkFrame(self, fg_color="#F8FAFF",
+                                     corner_radius=8, border_width=1,
+                                     border_color=CARD_BORDER)
+        txt_container.pack(fill="both", expand=True, padx=12, pady=8)
+
+        scrollbar = tk.Scrollbar(txt_container, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self._text = tk.Text(txt_container, font=("Arial", 10),
+                             bg="#F8FAFF", relief="flat", wrap="word",
+                             bd=0, highlightthickness=0,
+                             insertbackground=BTN_PRIMARY,
+                             yscrollcommand=scrollbar.set)
+        self._text.pack(side="left", fill="both", expand=True, padx=8, pady=6)
+        scrollbar.configure(command=self._text.yview)
+
+        self._text.tag_configure("bold",   font=("Arial", 10, "bold"))
+        self._text.tag_configure("italic", font=("Arial", 10, "italic"))
+
+        # Toolbar butonları
+        def _fmt_toggle(tag):
+            try:
+                s = self._text.index("sel.first")
+                e = self._text.index("sel.last")
+            except tk.TclError:
+                return
+            ranges = self._text.tag_ranges(tag)
+            has_tag = any(
+                self._text.compare(rs, "<", e) and
+                self._text.compare(re_, ">", s)
+                for rs, re_ in zip(ranges[::2], ranges[1::2])
+            )
+            if has_tag:
+                self._text.tag_remove(tag, s, e)
+            else:
+                self._text.tag_add(tag, s, e)
+
+        def _toggle_bullet():
+            idx      = self._text.index("insert")
+            line_no  = idx.split(".")[0]
+            ls       = f"{line_no}.0"
+            line_txt = self._text.get(ls, f"{line_no}.end")
+            if line_txt.startswith("• "):
+                self._text.delete(ls, f"{ls}+2c")
+            else:
+                self._text.insert(ls, "• ")
+            return "break"
+
+        for label, cmd, kbind, bold_lbl in [
+            ("B",  lambda: _fmt_toggle("bold"),   "<Control-b>", True),
+            ("I",  lambda: _fmt_toggle("italic"), "<Control-i>", False),
+            ("•",  _toggle_bullet,                "<Control-l>", False),
+        ]:
+            ctk.CTkButton(inner_tb, text=label, width=30, height=22,
+                          corner_radius=5, fg_color="#DCE8FF",
+                          hover_color=BTN_PRIMARY, text_color=BTN_PRIMARY,
+                          font=fnt(10, bold_lbl),
+                          command=cmd).pack(side="left", padx=(4, 0), pady=3)
+
+            def _bind_handler(e, _cmd=cmd):
+                _cmd()
+                return "break"
+            self._text.bind(kbind, _bind_handler)
+
+        ctk.CTkLabel(inner_tb, text="Ctrl+B  Ctrl+I  Ctrl+L",
+                     font=fnt(8), text_color=TEXT_LIGHT).pack(
+            side="right", padx=8)
+
+        self._text.bind("<Control-Return>", lambda e: self._on_save())
+
+        # Alt butonlar
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(footer, text="Kaydet", width=160, height=38,
+                      corner_radius=19, fg_color=BTN_SUCCESS,
+                      hover_color=BTN_SUC_H, font=fnt(12, True),
+                      command=self._on_save).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(footer, text="İptal", width=120, height=38,
+                      corner_radius=19, fg_color=BTN_NEUTRAL,
+                      hover_color=BTN_NEU_H, font=fnt(12),
+                      command=self._on_cancel).pack(side="left")
+
+    def _on_save(self) -> None:
+        data = self._module._serialize_rich_text(self._text)
+        self._module._load_rich_text(self._module._acik_text, data, readonly=True)
+        self._module._acik_text.configure(state="normal")
+        lines = int(self._module._acik_text.index("end-1c").split(".")[0])
+        self._module._acik_text.configure(
+            height=max(5, min(18, lines)), state="disabled")
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.destroy()
+
+
 class HelpDialog(ctk.CTkToplevel):
     _CONTENT = [
         ("📋  Genel İşleyiş", None),
@@ -1104,12 +1238,12 @@ class HelpDialog(ctk.CTkToplevel):
 
         ("📝  1 — Temel Bilgiler", None),
         (None, "Konu  (zorunlu)\nBelgenin başlık konusu. Konu adından dosya adı otomatik oluşturulur."),
-        (None, "Açıklamalar  (zorunlu)\nSaha ve teknik detayların yazıldığı alan. Metni seçip araç çubuğundaki\n  B  →  Kalın  |  I  →  İtalik  |  •  →  Madde işareti\nile biçimlendirilebilir. Kısayollar: Ctrl+B, Ctrl+I, Ctrl+L"),
+        (None, "Açıklamalar  (zorunlu)\nSaha ve teknik detayların yazıldığı alan. Kutuya tıklayınca büyük editör penceresi açılır.\nEditörde:\n  B  →  Kalın  |  I  →  İtalik  |  •  →  Madde işareti\nKısayollar: Ctrl+B / Ctrl+I / Ctrl+L  |  Ctrl+Enter → Kaydet"),
         (None, "Talep Eden Birim  (isteğe bağlı)\nTalebi oluşturan birimin adı. İşaretlenmezse belgede yer almaz."),
 
         ("💰  2 — Maliyet ve Kapsam", None),
         (None, "Disiplin Seçimi\nListeden ilgili disiplini işaretleyin — detay alanı açılır. Birden fazla disiplin seçilebilir."),
-        (None, "KDV Hariç Tutar\nOndalık için virgül kullanın:  150.000,00\nKDV Dahil tutar (%20) otomatik hesaplanır ve tabloda gösterilir."),
+        (None, "KDV Hariç Tutar\nOndalık için virgül kullanın:  150.000,00\nKDV Dahil Toplam (%20) tablonun altında ayrı satır olarak gösterilir."),
         (None, "Alt Kalemler\nBir disiplin içinde birden fazla iş kalemi varsa '+ Alt Kalem Ekle' butonuyla ayrı satırlar oluşturabilirsiniz. Alt kalemler girilince ana tutar otomatik toplanır; elle düzenlenemez hâle gelir."),
         (None, "Özel Disiplin\nListede olmayan bir kalem için en alttaki 'Yeni Disiplin' kutusuna yazıp Ekle'ye basın veya Enter'a basın."),
         (None, "Toplam Satırı\nBirden fazla disiplin seçildiğinde tablonun altında TOPLAM satırı otomatik eklenir."),
@@ -1124,7 +1258,7 @@ class HelpDialog(ctk.CTkToplevel):
         (None, "PDF'de fotoğraflardan hemen önce, sağa hizalı biçimde yer alır. Tarih bugünün tarihiyle otomatik doldurulur; GG.AA.YYYY formatında değiştirilebilir."),
 
         ("💡  İpuçları", None),
-        (None, "• Açıklamalar kutusu yazdıkça otomatik büyür (maks. 18 satır).\n• Maliyet tablosunda uzun alt kalem adları için satır yüksekliği otomatik genişler.\n• Çıktılar otomatik olarak masaüstüne kaydedilir.\n• Konu ve Açıklamalar alanları boş bırakılırsa belge üretilemez."),
+        (None, "• Açıklamalar kutusuna tıklayınca büyük editör açılır; Kaydet'le önizlemeye döner.\n• Maliyet tablosunda uzun alt kalem adları için satır yüksekliği otomatik genişler.\n• Çıktılar otomatik olarak masaüstüne kaydedilir.\n• Konu ve Açıklamalar alanları boş bırakılırsa belge üretilemez."),
     ]
 
     def __init__(self, parent) -> None:
@@ -1310,83 +1444,25 @@ class NoteModule(ctk.CTkFrame):
         editor_col = ctk.CTkFrame(acik_row, fg_color="transparent")
         editor_col.pack(side="left", fill="x", expand=True, pady=2)
 
-        # Toolbar
-        toolbar = ctk.CTkFrame(editor_col, fg_color="#EEF3FF",
-                               corner_radius=7, border_width=1, border_color=CARD_BORDER)
-        toolbar.pack(fill="x", pady=(0, 3))
-
-        # Metin kutusu
+        # Metin kutusu (salt-okunur önizleme — düzenlemek için tıklanır)
         txt_wrap = ctk.CTkFrame(editor_col, fg_color="#F8FAFF",
                                 corner_radius=8, border_width=1, border_color=CARD_BORDER)
         txt_wrap.pack(fill="x", expand=True)
         self._acik_text = tk.Text(txt_wrap, height=5, font=("Arial", 9),
                                    bg="#F8FAFF", relief="flat",
                                    wrap="word", bd=0, highlightthickness=0,
-                                   insertbackground=BTN_PRIMARY)
+                                   cursor="hand2", state="disabled")
         self._acik_text.pack(fill="both", expand=True, padx=6, pady=4)
 
-        # Tag tanımlamaları
         self._acik_text.tag_configure("bold",   font=("Arial", 9, "bold"))
         self._acik_text.tag_configure("italic", font=("Arial", 9, "italic"))
 
-        # Biçimlendirme fonksiyonları
-        def _fmt_toggle(tag):
-            try:
-                s = self._acik_text.index("sel.first")
-                e = self._acik_text.index("sel.last")
-            except tk.TclError:
-                return
-            ranges = self._acik_text.tag_ranges(tag)
-            has_tag = any(
-                self._acik_text.compare(rs, "<", e) and
-                self._acik_text.compare(re_, ">", s)
-                for rs, re_ in zip(ranges[::2], ranges[1::2])
-            )
-            if has_tag:
-                self._acik_text.tag_remove(tag, s, e)
-            else:
-                self._acik_text.tag_add(tag, s, e)
+        self._acik_text.bind("<Button-1>", lambda e: self._open_rich_text_modal())
 
-        def _toggle_bullet():
-            idx      = self._acik_text.index("insert")
-            line_no  = idx.split(".")[0]
-            ls       = f"{line_no}.0"
-            line_txt = self._acik_text.get(ls, f"{line_no}.end")
-            if line_txt.startswith("• "):
-                self._acik_text.delete(ls, f"{ls}+2c")
-            else:
-                self._acik_text.insert(ls, "• ")
-            return "break"
-
-        # Toolbar butonları
-        for label, cmd, kbind, bold_lbl in [
-            ("B",  lambda: _fmt_toggle("bold"),   "<Control-b>", True),
-            ("I",  lambda: _fmt_toggle("italic"), "<Control-i>", False),
-            ("•",  _toggle_bullet,                "<Control-l>", False),
-        ]:
-            ctk.CTkButton(toolbar, text=label, width=30, height=22,
-                          corner_radius=5, fg_color="#DCE8FF",
-                          hover_color=BTN_PRIMARY, text_color=BTN_PRIMARY,
-                          font=fnt(10, bold_lbl),
-                          command=cmd).pack(side="left", padx=(4, 0), pady=3)
-
-            def _bind_handler(e, _cmd=cmd):
-                _cmd()
-                return "break"
-            self._acik_text.bind(kbind, _bind_handler)
-
-        ctk.CTkLabel(toolbar, text="Ctrl+B  Ctrl+I  Ctrl+L",
-                     font=fnt(8), text_color=TEXT_LIGHT).pack(
-            side="right", padx=8)
-
-        def _resize_acik(*_):
-            lines = int(self._acik_text.index("end-1c").split(".")[0])
-            self._acik_text.configure(height=max(5, min(18, lines)))
-
-        self._acik_text.bind("<KeyRelease>", _resize_acik)
+        ctk.CTkLabel(editor_col, text="✎  Düzenlemek için tıklayın",
+                     font=fnt(8), text_color=TEXT_LIGHT).pack(anchor="w", padx=2)
 
         def _acik_wheel(event):
-            # Metin kutusu dolu değilse mouse tekerini dış frame'e ilet
             top, bottom = self._acik_text.yview()
             if top == 0.0 and bottom == 1.0:
                 self._left_scroll._parent_canvas.yview_scroll(
@@ -1896,8 +1972,8 @@ class NoteModule(ctk.CTkFrame):
         self._render_ext_list()
 
     # ── Serializasyon ─────────────────────────────────────────────────────────
-    def _serialize_rich_text(self) -> list:
-        w       = self._acik_text
+    def _serialize_rich_text(self, widget=None) -> list:
+        w       = widget if widget is not None else self._acik_text
         content = w.get("1.0", "end-1c")
         if not content:
             return []
@@ -1958,6 +2034,24 @@ class NoteModule(ctk.CTkFrame):
             pos += n_line + 1
 
         return result
+
+    def _load_rich_text(self, widget: tk.Text, data: list, readonly: bool = False) -> None:
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        for i, para in enumerate(data):
+            if i > 0:
+                widget.insert("end", "\n")
+            if para["bullet"]:
+                widget.insert("end", "• ")
+            for run in para["runs"]:
+                tags = tuple(t for t, v in [("bold", run["bold"]), ("italic", run["italic"])] if v)
+                widget.insert("end", run["text"], tags)
+        if readonly:
+            widget.configure(state="disabled")
+
+    def _open_rich_text_modal(self) -> None:
+        data = self._serialize_rich_text()
+        AciklamaEditDialog(self, data)
 
     # ── Üretim ───────────────────────────────────────────────────────────────
     def _collect_data(self) -> dict:
@@ -2025,9 +2119,9 @@ class NoteModule(ctk.CTkFrame):
             messagebox.showwarning("Eksik Bilgi", "Konu alanı boş bırakılamaz.")
             self._konu_entry.focus_set()
             return
-        if not self._acik_text.get("1.0", "end-1c").strip():
+        _rich = self._serialize_rich_text()
+        if not any(run["text"].strip() for para in _rich for run in para["runs"]):
             messagebox.showwarning("Eksik Bilgi", "Açıklamalar alanı boş bırakılamaz.")
-            self._acik_text.focus_set()
             return
 
         try:
