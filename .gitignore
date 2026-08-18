@@ -8,3 +8,5 @@ build/
 test_outputs/
 .claude/
 .venv/
+/logo.png
+/app.ico

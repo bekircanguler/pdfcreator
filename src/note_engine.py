@@ -272,50 +272,61 @@ class _PDFPainter:
         return self._body_reg
 
     def body_text_rich(self, paragraphs: list, indent: float = 0) -> None:
-        """Yapılandırılmış zengin metin: [{bullet, runs:[{text, bold, italic}]}]"""
+        """Yapılandırılmış zengin metin:
+        [{bullet, numbered, runs:[{text, bold, italic, underline, color}]}]"""
         c = self._c
-        BULLET_INDENT = 14
         SP_W = pdfmetrics.stringWidth(" ", self._body_reg, BODY_SIZE)
 
+        num_counter = 0
         for para in paragraphs:
-            is_bullet = para.get("bullet", False)
-            runs      = para.get("runs", [])
+            is_bullet   = para.get("bullet", False)
+            is_numbered = bool(para.get("numbered", False)) and not is_bullet
+            runs        = para.get("runs", [])
+            num_counter = num_counter + 1 if is_numbered else 0
+            marker      = "•" if is_bullet else (f"{num_counter}." if is_numbered else None)
 
             if not runs or all(not r.get("text", "").strip() for r in runs):
                 self.y -= LINE_H_BODY // 2
                 continue
 
-            x_origin = MARGIN + indent + (BULLET_INDENT if is_bullet else 0)
-            eff_w    = CONTENT_W - indent - (BULLET_INDENT if is_bullet else 0)
+            marker_indent = 14 if is_bullet else (20 if is_numbered else 0)
+            x_origin = MARGIN + indent + marker_indent
+            eff_w    = CONTENT_W - indent - marker_indent
 
             # Kelime/boşluk token listesi
             tokens: list = []
             for run in runs:
-                fn = self._get_run_font(run.get("bold", False), run.get("italic", False))
+                fn        = self._get_run_font(run.get("bold", False), run.get("italic", False))
+                color     = run.get("color")
+                underline = bool(run.get("underline", False))
                 parts = run["text"].split(" ")
                 for i, word in enumerate(parts):
                     if i > 0:
                         tokens.append({"t": " ", "fn": fn,
                                        "w": pdfmetrics.stringWidth(" ", fn, BODY_SIZE),
-                                       "sp": True})
+                                       "sp": True, "color": color, "underline": underline})
                     if word:
                         word_w = pdfmetrics.stringWidth(word, fn, BODY_SIZE)
                         if word_w <= eff_w:
-                            tokens.append({"t": word, "fn": fn, "w": word_w, "sp": False})
+                            tokens.append({"t": word, "fn": fn, "w": word_w, "sp": False,
+                                           "color": color, "underline": underline})
                         else:
                             # Satır genişliğini aşan kelime → karakter bazında böl
                             chunk, chunk_w = "", 0.0
                             for ch in word:
                                 ch_w = pdfmetrics.stringWidth(ch, fn, BODY_SIZE)
                                 if chunk_w + ch_w > eff_w and chunk:
-                                    tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False})
-                                    tokens.append({"t": " ", "fn": fn, "w": 0.0, "sp": True})
+                                    tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False,
+                                                   "color": color, "underline": underline})
+                                    tokens.append({"t": " ", "fn": fn, "w": 0.0, "sp": True,
+                                                   "color": color, "underline": underline})
                                     chunk, chunk_w = ch, ch_w
                                 else:
                                     chunk += ch
                                     chunk_w += ch_w
                             if chunk:
-                                tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False})
+                                tokens.append({"t": chunk, "fn": fn, "w": chunk_w, "sp": False,
+                                               "color": color, "underline": underline})
 
             # Satırlara yerleştir
             lines: list = []
@@ -349,20 +360,26 @@ class _PDFPainter:
                 else:
                     each_sp = SP_W
 
-                if is_bullet and li == 0:
+                if marker and li == 0:
                     c.setFont(self._body_reg, BODY_SIZE)
                     c.setFillColorRGB(0.18, 0.18, 0.18)
-                    c.drawString(MARGIN + indent, self.y, "•")
+                    c.drawString(MARGIN + indent, self.y, marker)
 
                 x = x_origin
                 for tok in line_toks:
-                    c.setFillColorRGB(0.18, 0.18, 0.18)
                     if tok["sp"]:
                         x += each_sp
+                        continue
+                    if tok.get("color"):
+                        c.setFillColorRGB(*hex_rgb(tok["color"]))
                     else:
-                        c.setFont(tok["fn"], BODY_SIZE)
-                        c.drawString(x, self.y, tok["t"])
-                        x += tok["w"]
+                        c.setFillColorRGB(0.18, 0.18, 0.18)
+                    c.setFont(tok["fn"], BODY_SIZE)
+                    c.drawString(x, self.y, tok["t"])
+                    if tok.get("underline"):
+                        c.setLineWidth(0.6)
+                        c.line(x, self.y - 1.5, x + tok["w"], self.y - 1.5)
+                    x += tok["w"]
 
                 self.y -= LINE_H_BODY
 
@@ -552,6 +569,89 @@ class _PDFPainter:
         if len(photos) % cols != 0:
             self.y -= cell_h + gap
 
+    def draw_photos_cards(self, photos: List[Path], captions: Dict[str, str],
+                          grid=None, crop: bool = True) -> None:
+        """Fotoğraf + açıklama kart düzeni (en az bir fotoğrafın açıklaması varsa kullanılır)."""
+        if not photos:
+            return
+        cols = grid[0] if grid else 2
+        gap  = 10
+        cell_w = (CONTENT_W - (cols - 1) * gap) / cols
+        img_h  = cell_w * 0.62
+        CAP_SIZE, CAP_LINE_H, CAP_PAD = 9, 11, 6
+
+        title_block = 20 + 14 + 4
+        self.spacer(8)
+        self._ensure(title_block + img_h + CAP_PAD * 2 + CAP_LINE_H + gap)
+        self.section_title("Fotoğraflar")
+        self.spacer(4)
+
+        cv = self._c
+        for row_start in range(0, len(photos), cols):
+            row_photos = photos[row_start: row_start + cols]
+            row_lines = []
+            for ph in row_photos:
+                cap = (captions.get(str(ph), "") or "").strip()
+                row_lines.append(wrap_text(cap, self._body_reg, CAP_SIZE,
+                                            cell_w - 2 * CAP_PAD) if cap else [])
+            max_lines = max((len(l) for l in row_lines), default=0)
+            cap_area_h = (CAP_PAD * 2 + max_lines * CAP_LINE_H) if max_lines else CAP_PAD
+            row_h = img_h + cap_area_h
+
+            self._ensure(row_h + gap + 10)
+            card_top = self.y
+
+            for i, ph in enumerate(row_photos):
+                x = MARGIN + i * (cell_w + gap)
+                img_y = card_top - img_h
+
+                cv.setFillColorRGB(1, 1, 1)
+                cv.rect(x, card_top - row_h, cell_w, row_h, fill=1, stroke=0)
+                cv.setStrokeColorRGB(*hex_rgb("#CBD9F0"))
+                cv.setLineWidth(0.6)
+                cv.rect(x, card_top - row_h, cell_w, row_h, fill=0, stroke=1)
+
+                try:
+                    with Image.open(ph) as im:
+                        im = ImageOps.exif_transpose(im)
+                        im = im.convert("RGB")
+                        iw, ih = im.size
+                        if crop:
+                            scale = max(cell_w / iw, img_h / ih)
+                            nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+                            im = im.resize((nw, nh), Image.LANCZOS)
+                            lft = (nw - int(cell_w)) // 2
+                            top = (nh - int(img_h)) // 2
+                            im = im.crop((lft, top, lft + int(cell_w), top + int(img_h)))
+                            nw, nh = int(cell_w), int(img_h)
+                            ox, oy = 0, 0
+                        else:
+                            scale = min(cell_w / iw, img_h / ih)
+                            nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+                            im = im.resize((nw, nh), Image.LANCZOS)
+                            ox, oy = (cell_w - nw) / 2, (img_h - nh) / 2
+                        buf = io.BytesIO()
+                        im.save(buf, "JPEG", quality=88)
+                        buf.seek(0)
+                        cv.drawImage(ImageReader(buf), x + ox, img_y + oy,
+                                     width=nw, height=nh, preserveAspectRatio=False)
+                except Exception:
+                    pass
+
+                lines = row_lines[i]
+                if lines:
+                    cv.setStrokeColorRGB(*hex_rgb("#E2E8F5"))
+                    cv.setLineWidth(0.5)
+                    cv.line(x, img_y, x + cell_w, img_y)
+                    cv.setFont(self._body_reg, CAP_SIZE)
+                    cv.setFillColorRGB(*hex_rgb("#374151"))
+                    ty = img_y - CAP_PAD - 8
+                    for ln in lines:
+                        cv.drawString(x + CAP_PAD, ty, ln)
+                        ty -= CAP_LINE_H
+
+            self.y -= row_h + gap
+
     def draw_footer_note(self, note: str) -> None:
         self.spacer(10)
         c = self._c
@@ -654,6 +754,7 @@ def build_note(data: Dict[str, Any]) -> Dict[str, str]:
     talep_eden       = data.get("talep_eden")
     disciplines = data.get("disciplines", [])
     images      = [Path(p) for p in data.get("images", [])]
+    captions    = data.get("captions", {})
     photo_grid  = data.get("photo_grid")
     photo_crop  = data.get("photo_crop", True)
     ext_pdfs    = data.get("ext_pdfs", [])
@@ -695,7 +796,10 @@ def build_note(data: Dict[str, Any]) -> Dict[str, str]:
 
     p.draw_date_signature(tarih, duzenleyen)
 
-    p.draw_photos(images, grid=photo_grid, crop=photo_crop)
+    if any((captions.get(str(im), "") or "").strip() for im in images):
+        p.draw_photos_cards(images, captions, grid=photo_grid, crop=photo_crop)
+    else:
+        p.draw_photos(images, grid=photo_grid, crop=photo_crop)
 
     if _need_saha_note(disciplines):
         p.draw_footer_note(_SAHA_NOTE)
@@ -733,6 +837,7 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     talep_eden       = data.get("talep_eden")
     disciplines      = data.get("disciplines", [])
     images           = [Path(p) for p in data.get("images", [])]
+    captions         = data.get("captions", {})
 
     doc = Document()
 
@@ -745,13 +850,21 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     TNR = "Times New Roman"
 
     def _set_run_font(run, size: float = 12, bold: bool = False,
-                      color: RGBColor = None, italic: bool = False):
+                      color: RGBColor = None, italic: bool = False,
+                      underline: bool = False):
         run.font.name = TNR
         run.font.size = Pt(size)
         run.bold      = bold
         run.italic    = italic
+        run.underline = underline
         if color:
             run.font.color.rgb = color
+
+    def _hex_to_rgbcolor(hex_str: Optional[str]) -> Optional[RGBColor]:
+        if not hex_str:
+            return None
+        h = hex_str.lstrip("#")
+        return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
     # ── Logo + Başlık ─────────────────────────────────────────────────────────
     logo = _logo_path()
@@ -827,9 +940,13 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     # ── Açıklamalar ───────────────────────────────────────────────────────────
     if aciklamalar_rich:
         _section_heading("Açıklamalar")
+        num_counter = 0
         for para in aciklamalar_rich:
+            is_bullet   = bool(para.get("bullet"))
+            is_numbered = bool(para.get("numbered")) and not is_bullet
+            num_counter = num_counter + 1 if is_numbered else 0
             runs_data = [r for r in para.get("runs", []) if r.get("text")]
-            if not runs_data and not para.get("bullet"):
+            if not runs_data and not is_bullet and not is_numbered:
                 # Boş paragraf → küçük boşluk olarak ekle
                 sp = doc.add_paragraph()
                 sp.paragraph_format.space_after = Pt(4)
@@ -838,16 +955,23 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
             p_doc.paragraph_format.space_after  = Pt(3)
             p_doc.paragraph_format.space_before = Pt(0)
             p_doc.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            if para.get("bullet"):
+            if is_bullet:
                 p_doc.paragraph_format.left_indent    = Cm(0.5)
                 p_doc.paragraph_format.first_line_indent = Cm(-0.5)
                 bullet_run = p_doc.add_run("• ")
                 _set_run_font(bullet_run, size=11)
+            elif is_numbered:
+                p_doc.paragraph_format.left_indent    = Cm(0.6)
+                p_doc.paragraph_format.first_line_indent = Cm(-0.6)
+                num_run = p_doc.add_run(f"{num_counter}. ")
+                _set_run_font(num_run, size=11)
             for rd in runs_data:
                 r = p_doc.add_run(rd["text"])
                 _set_run_font(r, size=11,
                               bold=rd.get("bold", False),
-                              italic=rd.get("italic", False))
+                              italic=rd.get("italic", False),
+                              underline=rd.get("underline", False),
+                              color=_hex_to_rgbcolor(rd.get("color")))
     elif aciklamalar:
         _section_heading("Açıklamalar")
         _body(aciklamalar)
@@ -979,18 +1103,44 @@ def _build_docx(data: Dict, tarih: str, duzenleyen: str,
     # ── Fotoğraflar ───────────────────────────────────────────────────────────
     if images:
         _section_heading("Fotoğraflar")
+        has_captions = any((captions.get(str(p), "") or "").strip() for p in images)
+
+        def _shade_cell(cell, fill="F8FAFF"):
+            tcPr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), fill)
+            tcPr.append(shd)
+
         tbl = doc.add_table(rows=0, cols=2)
+        if has_captions:
+            tbl.style = "Table Grid"
         for i in range(0, len(images), 2):
             row = tbl.add_row().cells
             for j in range(2):
                 if i + j < len(images):
                     ph = images[i + j]
+                    cell = row[j]
+                    if has_captions:
+                        _shade_cell(cell)
                     try:
-                        para = row[j].paragraphs[0]
+                        para = cell.paragraphs[0]
+                        if has_captions:
+                            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         run = para.add_run()
                         run.add_picture(str(ph), width=Cm(8.0))
                     except Exception:
-                        row[j].text = ph.name
+                        cell.text = ph.name
+                        continue
+                    if has_captions:
+                        cap = (captions.get(str(ph), "") or "").strip()
+                        if cap:
+                            cap_p = cell.add_paragraph()
+                            cap_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            cap_run = cap_p.add_run(cap)
+                            _set_run_font(cap_run, size=9,
+                                          color=RGBColor(0x37, 0x41, 0x51))
 
     # ── Saha notu ─────────────────────────────────────────────────────────────
     if _need_saha_note(disciplines):

@@ -5,13 +5,16 @@ Fotoğraf PDF Dönüştürücü — Modern masaüstü uygulaması
 """
 
 import os
+import re
 import sys
 import math
 import time
 import queue
 import random
 import threading
+import webbrowser
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import tkinter as tk
 import customtkinter as ctk
@@ -19,7 +22,17 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 sys.path.insert(0, str(Path(__file__).parent))
-from engine import load_config, scan_images, build_pdf, get_orientation, grid_layout
+from engine import load_config, scan_images, build_pdf, get_orientation, grid_layout, IMAGE_EXTS
+import word_paste
+import logo
+import update_check
+from version import APP_VERSION
+
+try:
+    import windnd
+    _HAS_WINDND = True
+except ImportError:
+    _HAS_WINDND = False
 
 # ─── Tema ────────────────────────────────────────────────────────────────────
 ctk.set_appearance_mode("light")
@@ -45,6 +58,26 @@ WARN        = "#D97706"
 
 IMAGE_FILTER = [("Fotoğraf", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG")]
 
+# Açıklamalar zengin metin editörü — renk paleti (varsayılan/siyah hariç)
+COLOR_PALETTE_HEX = ["DC2626", "2563EB", "059669", "D97706"]   # kırmızı, mavi, yeşil, turuncu
+COLOR_SWATCHES = [
+    (None,      "#0F172A", "Varsayılan"),
+    ("DC2626",  "#DC2626", "Kırmızı"),
+    ("2563EB",  "#2563EB", "Mavi"),
+    ("059669",  "#059669", "Yeşil"),
+    ("D97706",  "#D97706", "Turuncu"),
+]
+_NUMBERED_RE = re.compile(r"^(\d{1,3})[.)]\s")
+
+
+def _configure_rich_tags(text_widget: tk.Text, base_font: str = "Arial", base_size: int = 10) -> None:
+    """Zengin metin tag'lerini bir tk.Text widget'ına tanımlar (editör + salt-okunur önizleme)."""
+    text_widget.tag_configure("bold",      font=(base_font, base_size, "bold"))
+    text_widget.tag_configure("italic",    font=(base_font, base_size, "italic"))
+    text_widget.tag_configure("underline", underline=True)
+    for _hex in COLOR_PALETTE_HEX:
+        text_widget.tag_configure(f"color_{_hex}", foreground=f"#{_hex}")
+
 LAYOUT_OPTIONS = [
     "Otomatik Düzen",
     "1×1  (Tam Sayfa)",
@@ -66,6 +99,17 @@ LAYOUT_GRID = {
 PREVIEW_W = 300
 PREVIEW_H = 424   # ≈ A4 oranı
 
+UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000   # 15 dakika
+
+
+def _app_icon_path() -> Optional[Path]:
+    """EXE simgesi/pencere ikonu için app.ico yolu (tools/generate_brand_assets.py üretir)."""
+    if hasattr(sys, "_MEIPASS"):
+        p = Path(sys._MEIPASS) / "app.ico"
+    else:
+        p = Path(__file__).resolve().parent.parent / "app.ico"
+    return p if p.exists() else None
+
 
 def _safe_filename(title: str) -> str:
     invalid = r'\/:*?"<>|'
@@ -75,79 +119,13 @@ def _safe_filename(title: str) -> str:
 
 # ─── Logo ────────────────────────────────────────────────────────────────────
 def make_logo(size: int = 56, pil_only: bool = False):
-    """Kurumsal logo: dişli çark + belge — Bakım ve Onarım teması."""
-    s  = size
-    sc = s / 56
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d   = ImageDraw.Draw(img)
-
-    # Arka plan: koyu lacivert daire
-    d.ellipse([1, 1, s - 2, s - 2], fill=(26, 46, 74, 255))
-    # İç ince halka
-    ir = max(2, int(3 * sc))
-    d.ellipse([ir + 1, ir + 1, s - ir - 2, s - ir - 2],
-              outline=(50, 85, 140, 180), width=max(1, int(1 * sc)))
-
-    cx, cy = s / 2, s / 2
-
-    # ── Dişli çark (sol-üst bölge) ──
-    gc_x = cx - int(3 * sc)
-    gc_y = cy - int(4 * sc)
-    r_out = int(14 * sc)
-    r_inn = int(9 * sc)
-    n_t   = 8
-    period = 2 * math.pi / n_t
-    half_tooth = period * 0.40 / 2
-
-    gear_pts = []
-    for i in range(n_t):
-        base = 2 * math.pi * i / n_t - math.pi / 2
-        a0 = base - period / 2 + period * 0.06
-        a1 = base - half_tooth
-        a2 = base + half_tooth
-        a3 = base + period / 2 - period * 0.06
-        for ang, r in [(a0, r_inn), (a1, r_out), (a2, r_out), (a3, r_inn)]:
-            gear_pts.append((gc_x + r * math.cos(ang),
-                             gc_y + r * math.sin(ang)))
-    d.polygon(gear_pts, fill=(37, 99, 235, 255))
-
-    # Dişli merkez deliği
-    hole_r = max(3, int(5 * sc))
-    d.ellipse([gc_x - hole_r, gc_y - hole_r, gc_x + hole_r, gc_y + hole_r],
-              fill=(26, 46, 74, 255))
-
-    # ── Belge ikonu (sağ-alt bölge, dişliyle örtüşür) ──
-    doc_x = int(cx)
-    doc_y = int(cy - int(1 * sc))
-    doc_w = int(15 * sc)
-    doc_h = int(18 * sc)
-    fold  = int(5 * sc)
-
-    # Belge gövdesi (beyaz)
-    d.rectangle([doc_x, doc_y, doc_x + doc_w - fold, doc_y + doc_h],
-                fill=(255, 255, 255, 245))
-    d.rectangle([doc_x + doc_w - fold, doc_y + fold,
-                 doc_x + doc_w, doc_y + doc_h],
-                fill=(255, 255, 255, 245))
-    # Katlama üçgeni (açık mavi)
-    d.polygon([
-        (doc_x + doc_w - fold, doc_y),
-        (doc_x + doc_w, doc_y + fold),
-        (doc_x + doc_w - fold, doc_y + fold),
-    ], fill=(150, 185, 230, 255))
-
-    # Belge çizgileri (mavi)
-    lx1 = doc_x + max(2, int(3 * sc))
-    lx2 = doc_x + doc_w - fold - max(2, int(3 * sc))
-    for ly_off in [int(7 * sc), int(10 * sc), int(13 * sc), int(16 * sc)]:
-        ly = doc_y + ly_off
-        if ly < doc_y + doc_h - 1:
-            d.line([lx1, ly, lx2, ly], fill=(37, 99, 235, 200),
-                   width=max(1, int(1.2 * sc)))
-
+    """Kurumsal logo: dişli çark + belge — Bakım ve Onarım teması.
+    Çizim mantığı src/logo.py'de tek kaynak olarak tutulur (EXE simgesi,
+    pencere ikonu ve belge başlığı da aynı yerden üretilir)."""
+    img = logo.draw_mark(size, simple=False)
     if pil_only:
         return img
-    return ctk.CTkImage(light_image=img, dark_image=img, size=(s // 2, s // 2))
+    return ctk.CTkImage(light_image=img, dark_image=img, size=(size // 2, size // 2))
 
 
 # ─── UI Yardımcıları ─────────────────────────────────────────────────────────
@@ -361,7 +339,7 @@ class SplashScreen(tk.Toplevel):
                              font=("", 18, "bold"), fill="#FFFFFF",
                              anchor="center", tags="static")
         self._cv.create_text(self._cx, int(self._H * 0.70),
-                             text="PDF Motor V1",
+                             text=f"PDF Motor v{APP_VERSION}",
                              font=("", 10), fill="#2D5A8A",
                              anchor="center", tags="static")
         self._cv.create_text(self._W - 10, self._H - 8,
@@ -1152,8 +1130,7 @@ class AciklamaEditDialog(ctk.CTkToplevel):
         self._text.pack(side="left", fill="both", expand=True, padx=8, pady=6)
         scrollbar.configure(command=self._text.yview)
 
-        self._text.tag_configure("bold",   font=("Arial", 10, "bold"))
-        self._text.tag_configure("italic", font=("Arial", 10, "italic"))
+        _configure_rich_tags(self._text)
 
         # Toolbar butonları
         def _fmt_toggle(tag):
@@ -1173,6 +1150,27 @@ class AciklamaEditDialog(ctk.CTkToplevel):
             else:
                 self._text.tag_add(tag, s, e)
 
+        def _apply_color(hex_or_none):
+            try:
+                s = self._text.index("sel.first")
+                e = self._text.index("sel.last")
+            except tk.TclError:
+                return
+            for _hex in COLOR_PALETTE_HEX:
+                self._text.tag_remove(f"color_{_hex}", s, e)
+            if hex_or_none:
+                self._text.tag_add(f"color_{hex_or_none}", s, e)
+
+        def _strip_line_prefix(line_no):
+            ls       = f"{line_no}.0"
+            line_txt = self._text.get(ls, f"{line_no}.end")
+            if line_txt.startswith("• "):
+                self._text.delete(ls, f"{ls}+2c")
+                return
+            m = _NUMBERED_RE.match(line_txt)
+            if m:
+                self._text.delete(ls, f"{ls}+{len(m.group(0))}c")
+
         def _toggle_bullet():
             idx      = self._text.index("insert")
             line_no  = idx.split(".")[0]
@@ -1181,13 +1179,35 @@ class AciklamaEditDialog(ctk.CTkToplevel):
             if line_txt.startswith("• "):
                 self._text.delete(ls, f"{ls}+2c")
             else:
-                self._text.insert(ls, "• ")
+                _strip_line_prefix(line_no)
+                self._text.insert(f"{line_no}.0", "• ")
+            return "break"
+
+        def _toggle_numbered():
+            idx      = self._text.index("insert")
+            line_no  = int(idx.split(".")[0])
+            line_txt = self._text.get(f"{line_no}.0", f"{line_no}.end")
+            if _NUMBERED_RE.match(line_txt):
+                _strip_line_prefix(line_no)
+            else:
+                _strip_line_prefix(line_no)
+                n, prev = 1, line_no - 1
+                while prev >= 1:
+                    prev_txt = self._text.get(f"{prev}.0", f"{prev}.end")
+                    if _NUMBERED_RE.match(prev_txt):
+                        n += 1
+                        prev -= 1
+                    else:
+                        break
+                self._text.insert(f"{line_no}.0", f"{n}. ")
             return "break"
 
         for label, cmd, kbind, bold_lbl in [
-            ("B",  lambda: _fmt_toggle("bold"),   "<Control-b>", True),
-            ("I",  lambda: _fmt_toggle("italic"), "<Control-i>", False),
-            ("•",  _toggle_bullet,                "<Control-l>", False),
+            ("B",  lambda: _fmt_toggle("bold"),      "<Control-b>", True),
+            ("I",  lambda: _fmt_toggle("italic"),    "<Control-i>", False),
+            ("U",  lambda: _fmt_toggle("underline"), "<Control-u>", False),
+            ("•",  _toggle_bullet,                   "<Control-l>", False),
+            ("1.", _toggle_numbered,                 "<Control-Shift-L>", False),
         ]:
             ctk.CTkButton(inner_tb, text=label, width=30, height=22,
                           corner_radius=5, fg_color="#DCE8FF",
@@ -1200,11 +1220,23 @@ class AciklamaEditDialog(ctk.CTkToplevel):
                 return "break"
             self._text.bind(kbind, _bind_handler)
 
-        ctk.CTkLabel(inner_tb, text="Ctrl+B  Ctrl+I  Ctrl+L",
+        ctk.CTkFrame(inner_tb, fg_color=CARD_BORDER, width=1, height=18).pack(
+            side="left", padx=6, pady=3)
+        for _hex, _swatch, _tip in COLOR_SWATCHES:
+            ctk.CTkButton(inner_tb, text="", width=18, height=18,
+                          corner_radius=9, fg_color=_swatch,
+                          hover_color=_swatch, border_width=1,
+                          border_color=CARD_BORDER,
+                          command=lambda h=_hex: _apply_color(h)).pack(
+                side="left", padx=2, pady=3)
+
+        ctk.CTkLabel(inner_tb, text="Ctrl+B  Ctrl+I  Ctrl+U  Ctrl+L",
                      font=fnt(8), text_color=TEXT_LIGHT).pack(
             side="right", padx=8)
 
         self._text.bind("<Control-Return>", lambda e: self._on_save())
+        self._text.bind("<Control-v>", self._paste_rich)
+        self._text.bind("<Control-V>", self._paste_rich)
 
         # Alt butonlar
         footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -1217,6 +1249,61 @@ class AciklamaEditDialog(ctk.CTkToplevel):
                       corner_radius=19, fg_color=BTN_NEUTRAL,
                       hover_color=BTN_NEU_H, font=fnt(12),
                       command=self._on_cancel).pack(side="left")
+
+    def _paste_rich(self, event=None) -> str:
+        html = word_paste.read_clipboard_html()
+        if html:
+            try:
+                paragraphs = word_paste.parse_html_to_paragraphs(html)
+            except Exception:
+                paragraphs = None
+        else:
+            paragraphs = None
+
+        if not paragraphs:
+            try:
+                plain = self.clipboard_get()
+            except tk.TclError:
+                return "break"
+            paragraphs = word_paste.parse_plain_to_paragraphs(plain)
+
+        try:
+            self._text.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+
+        for i, para in enumerate(paragraphs):
+            if i > 0:
+                self._text.insert("insert", "\n")
+            if para["bullet"]:
+                self._text.insert("insert", "• ")
+            elif para["numbered"]:
+                n, line_no = 1, int(self._text.index("insert").split(".")[0]) - 1
+                while line_no >= 1:
+                    prev_txt = self._text.get(f"{line_no}.0", f"{line_no}.end")
+                    if _NUMBERED_RE.match(prev_txt):
+                        n += 1
+                        line_no -= 1
+                    else:
+                        break
+                self._text.insert("insert", f"{n}. ")
+            for run in para["runs"]:
+                if not run["text"]:
+                    continue
+                tags = tuple(t for t, v in [
+                    ("bold", run.get("bold")), ("italic", run.get("italic")),
+                    ("underline", run.get("underline")),
+                ] if v)
+                color = run.get("color")
+                if color and color.lstrip("#") not in COLOR_PALETTE_HEX:
+                    # Word'den gelen tam hex renk paletle eşleşmiyorsa da korunur
+                    tag = f"color_{color.lstrip('#')}"
+                    self._text.tag_configure(tag, foreground=color)
+                    tags = tags + (tag,)
+                elif color:
+                    tags = tags + (f"color_{color.lstrip('#')}",)
+                self._text.insert("insert", run["text"], tags)
+        return "break"
 
     def _on_save(self) -> None:
         data = self._module._serialize_rich_text(self._text)
@@ -1238,7 +1325,7 @@ class HelpDialog(ctk.CTkToplevel):
 
         ("📝  1 — Temel Bilgiler", None),
         (None, "Konu  (zorunlu)\nBelgenin başlık konusu. Konu adından dosya adı otomatik oluşturulur."),
-        (None, "Açıklamalar  (zorunlu)\nSaha ve teknik detayların yazıldığı alan. Kutuya tıklayınca büyük editör penceresi açılır.\nEditörde:\n  B  →  Kalın  |  I  →  İtalik  |  •  →  Madde işareti\nKısayollar: Ctrl+B / Ctrl+I / Ctrl+L  |  Ctrl+Enter → Kaydet"),
+        (None, "Açıklamalar  (zorunlu)\nSaha ve teknik detayların yazıldığı alan. Kutuya tıklayınca büyük editör penceresi açılır.\nEditörde:\n  B  →  Kalın  |  I  →  İtalik  |  U  →  Altı çizili  |  •  →  Madde işareti  |  1.  →  Numaralı liste\nSağdaki renkli daireler seçili metnin rengini değiştirir.\nWord'den kopyalanan metin (madde işareti, paragraf, kalın/renk dahil) olduğu gibi yapıştırılır.\nKısayollar: Ctrl+B / Ctrl+I / Ctrl+U / Ctrl+L  |  Ctrl+Enter → Kaydet"),
         (None, "Talep Eden Birim  (isteğe bağlı)\nTalebi oluşturan birimin adı. İşaretlenmezse belgede yer almaz."),
 
         ("💰  2 — Maliyet ve Kapsam", None),
@@ -1249,7 +1336,8 @@ class HelpDialog(ctk.CTkToplevel):
         (None, "Toplam Satırı\nBirden fazla disiplin seçildiğinde tablonun altında TOPLAM satırı otomatik eklenir."),
 
         ("📷  3 — Fotoğraflar", None),
-        (None, "Klasör seçince içindeki tüm JPG/PNG dosyalar eklenir. Sağ paneldeki önizleme fotoğraf düzenini anlık gösterir. Düzen açılır menüsünden sayfa başına fotoğraf adedi belirlenebilir."),
+        (None, "Klasör seçince içindeki tüm JPG/PNG dosyalar eklenir. Fotoğrafları Gezgin'den doğrudan pencereye sürükleyip bırakarak da ekleyebilirsiniz. Sağ paneldeki önizleme fotoğraf düzenini anlık gösterir. Düzen açılır menüsünden sayfa başına fotoğraf adedi belirlenebilir."),
+        (None, "Fotoğraf Listesi\nEklenen her fotoğrafın altına isteğe bağlı bir açıklama yazılabilir. En az bir fotoğrafa açıklama yazıldığında çıktıda fotoğraf+açıklama kart düzeni kullanılır; hiçbiri doldurulmazsa sade ızgara düzeni değişmeden kalır. ✕ ile fotoğraf listeden kaldırılır."),
 
         ("📎  4 — Harici PDF Ekleri", None),
         (None, "Harita, vaziyet planı, keşif cetveli gibi hazır belgeler son sayfalara eklenir. '+ PDF Ekle' ile seçilen dosyalar sıraya göre eklenir."),
@@ -1358,6 +1446,8 @@ class NoteModule(ctk.CTkFrame):
         self.root     = root
         self._q       = queue.Queue()
         self._images  = []        # List[Path] — seçili fotoğraflar
+        self._captions: Dict[str, str] = {}   # str(path) → açıklama
+        self._photo_thumbs: list = []          # PhotoImage referansları (GC koruması)
         self._ext_pdfs = []       # List[str]
         self._disc_vars       = {}   # name → BooleanVar
         self._disc_rows       = {}   # name → detail frame
@@ -1379,6 +1469,12 @@ class NoteModule(ctk.CTkFrame):
                     self._on_success(data)
                 elif kind == "preview":
                     self._on_preview_ready(data)
+                elif kind == "thumb":
+                    label_widget, pil_img = data
+                    if pil_img is not None and label_widget.winfo_exists():
+                        tk_img = ImageTk.PhotoImage(pil_img)
+                        self._photo_thumbs.append(tk_img)
+                        label_widget.configure(image=tk_img, text="")
                 else:
                     self._on_error(data)
         except queue.Empty:
@@ -1454,8 +1550,7 @@ class NoteModule(ctk.CTkFrame):
                                    cursor="hand2", state="disabled")
         self._acik_text.pack(fill="both", expand=True, padx=6, pady=4)
 
-        self._acik_text.tag_configure("bold",   font=("Arial", 9, "bold"))
-        self._acik_text.tag_configure("italic", font=("Arial", 9, "italic"))
+        _configure_rich_tags(self._acik_text, base_size=9)
 
         self._acik_text.bind("<Button-1>", lambda e: self._open_rich_text_modal())
 
@@ -1535,6 +1630,9 @@ class NoteModule(ctk.CTkFrame):
         ctk.CTkButton(btn_row, text="🖼  Tek Tek Seç", height=36, corner_radius=18,
                       fg_color=BTN_NEUTRAL, hover_color=BTN_NEU_H,
                       font=fnt(11), command=self._pick_photo_files).pack(side="left")
+        if _HAS_WINDND:
+            ctk.CTkLabel(btn_row, text="…veya fotoğrafları buraya sürükleyin",
+                         font=fnt(9), text_color=TEXT_LIGHT).pack(side="left", padx=(10, 0))
 
         info_box = ctk.CTkFrame(c3, fg_color="#F0F6FF", corner_radius=8,
                                 border_width=1, border_color=CARD_BORDER)
@@ -1546,6 +1644,19 @@ class NoteModule(ctk.CTkFrame):
         self._photo_count_lbl = ctk.CTkLabel(c3, text="", font=fnt(10),
                                               text_color=TEXT_MID, anchor="w")
         self._photo_count_lbl.pack(fill="x", padx=16, pady=(0, 4))
+
+        if _HAS_WINDND:
+            windnd.hook_dropfiles(c3, func=self._on_photo_drop)
+
+        # Fotoğraf listesi — küçük resim + isteğe bağlı açıklama + kaldır
+        ctk.CTkLabel(c3, text="Fotoğraf altına açıklama eklemek isteğe bağlıdır",
+                     font=fnt(9), text_color=TEXT_LIGHT, anchor="w").pack(
+            fill="x", padx=16, pady=(4, 2))
+        self._photo_list_frame = ctk.CTkScrollableFrame(
+            c3, fg_color="#F8FAFF", corner_radius=8, height=170,
+            border_width=1, border_color=CARD_BORDER)
+        self._photo_list_frame.pack(fill="x", padx=16, pady=(0, 10))
+        self._render_photo_rows()
 
         # Düzen
         layout_row = ctk.CTkFrame(c3, fg_color="transparent")
@@ -1861,6 +1972,8 @@ class NoteModule(ctk.CTkFrame):
     def _apply_photos(self, imgs, label) -> None:
         self._images  = imgs
         self._cur_page = 0
+        valid_keys = {str(p) for p in imgs}
+        self._captions = {k: v for k, v in self._captions.items() if k in valid_keys}
         short = str(label) if len(str(label)) <= 55 else "…" + str(label)[-52:]
         self._photo_path_lbl.configure(text=short,
                                         text_color=TEXT_DARK if imgs else TEXT_LIGHT)
@@ -1869,7 +1982,98 @@ class NoteModule(ctk.CTkFrame):
         else:
             self._photo_count_lbl.configure(
                 text=f"✓  {len(imgs)} fotoğraf seçildi", text_color=SUCCESS)
+        self._render_photo_rows()
         self._schedule_preview()
+
+    def _on_photo_drop(self, file_list) -> None:
+        def _decode(p):
+            if isinstance(p, str):
+                return p
+            for enc in ("mbcs", "utf-8", "cp1254"):
+                try:
+                    return p.decode(enc)
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            return p.decode("latin-1", errors="replace")
+
+        dropped: List[Path] = []
+        for raw in file_list:
+            p = Path(_decode(raw))
+            if p.is_dir():
+                dropped.extend(scan_images(str(p)))
+            elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                dropped.append(p)
+
+        existing = set(self._images)
+        added = [p for p in dropped if p not in existing]
+        if not added:
+            return
+        self._apply_photos(self._images + added, f"+{len(added)} fotoğraf eklendi")
+
+    # ── Fotoğraf listesi (küçük resim + açıklama + kaldır) ─────────────────────
+    def _remove_photo(self, path: Path) -> None:
+        self._captions.pop(str(path), None)
+        remaining = [p for p in self._images if p != path]
+        label = self._photo_path_lbl.cget("text") if remaining else "Henüz seçim yapılmadı"
+        self._apply_photos(remaining, label)
+
+    def _render_photo_rows(self) -> None:
+        for w in self._photo_list_frame.winfo_children():
+            w.destroy()
+        self._photo_thumbs.clear()
+
+        if not self._images:
+            ctk.CTkLabel(self._photo_list_frame, text="Henüz fotoğraf eklenmedi",
+                         font=fnt(10), text_color=TEXT_LIGHT).pack(pady=10)
+            return
+
+        for path in self._images:
+            row = ctk.CTkFrame(self._photo_list_frame, fg_color="white",
+                               corner_radius=6, border_width=1, border_color=CARD_BORDER)
+            row.pack(fill="x", pady=3, padx=2)
+
+            thumb_box = ctk.CTkFrame(row, width=48, height=36,
+                                     fg_color="#EEF2FF", corner_radius=4)
+            thumb_box.pack(side="left", padx=6, pady=6)
+            thumb_box.pack_propagate(False)
+            thumb_lbl = tk.Label(thumb_box, bg="#EEF2FF", bd=0, highlightthickness=0)
+            thumb_lbl.pack(fill="both", expand=True)
+
+            cap_entry = ctk.CTkEntry(row, font=fnt(10), fg_color="#F8FAFF",
+                                     border_color=CARD_BORDER, border_width=1,
+                                     corner_radius=6,
+                                     placeholder_text="Açıklama (isteğe bağlı)")
+            cap_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), pady=6)
+            existing = self._captions.get(str(path), "")
+            if existing:
+                cap_entry.insert(0, existing)
+
+            def _on_caption_change(_e, _p=path, _ent=cap_entry):
+                self._captions[str(_p)] = _ent.get().strip()
+
+            cap_entry.bind("<KeyRelease>", _on_caption_change)
+            cap_entry.bind("<FocusOut>", _on_caption_change)
+
+            ctk.CTkButton(row, text="✕", width=26, height=26, corner_radius=5,
+                          fg_color="#EEF2FF", hover_color=ERROR,
+                          text_color=TEXT_LIGHT, font=fnt(10),
+                          command=lambda p=path: self._remove_photo(p)).pack(
+                side="right", padx=6, pady=6)
+
+            self._load_thumb_async(path, thumb_lbl)
+
+    def _load_thumb_async(self, path: Path, label_widget) -> None:
+        def work():
+            try:
+                with Image.open(path) as im:
+                    im = ImageOps.exif_transpose(im).convert("RGB")
+                    im.thumbnail((48, 36))
+                    im.load()
+            except Exception:
+                im = None
+            self._q.put(("thumb", (label_widget, im)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ── Önizleme ─────────────────────────────────────────────────────────────
     def _get_pages(self):
@@ -1994,10 +2198,13 @@ class NoteModule(ctk.CTkFrame):
             return line_starts[ln] + int(col)
 
         n = len(content)
-        bold_arr   = bytearray(n)
-        italic_arr = bytearray(n)
+        bold_arr      = bytearray(n)
+        italic_arr    = bytearray(n)
+        underline_arr = bytearray(n)
+        color_arr: List[Optional[str]] = [None] * n
 
-        for tag, arr in [("bold", bold_arr), ("italic", italic_arr)]:
+        for tag, arr in [("bold", bold_arr), ("italic", italic_arr),
+                          ("underline", underline_arr)]:
             ranges = w.tag_ranges(tag)
             for i in range(0, len(ranges), 2):
                 s = tk_to_abs(str(ranges[i]))
@@ -2005,32 +2212,47 @@ class NoteModule(ctk.CTkFrame):
                 for j in range(s, e):
                     arr[j] = 1
 
+        for tag in w.tag_names():
+            if not tag.startswith("color_"):
+                continue
+            hex_color = "#" + tag[len("color_"):]
+            ranges = w.tag_ranges(tag)
+            for i in range(0, len(ranges), 2):
+                s = tk_to_abs(str(ranges[i]))
+                e = min(tk_to_abs(str(ranges[i + 1])), n)
+                for j in range(s, e):
+                    color_arr[j] = hex_color
+
         result = []
         pos = 0
         for line_text in lines_text:
-            n_line    = len(line_text)
-            is_bullet = line_text.startswith("• ")
-            t_start   = 2 if is_bullet else 0
+            n_line     = len(line_text)
+            is_bullet  = line_text.startswith("• ")
+            num_match  = None if is_bullet else _NUMBERED_RE.match(line_text)
+            is_numbered = bool(num_match)
+            t_start    = 2 if is_bullet else (len(num_match.group(0)) if num_match else 0)
 
             runs: list = []
             if n_line > t_start:
                 j0    = pos + t_start
-                cur_b = bool(bold_arr[j0])
-                cur_i = bool(italic_arr[j0])
+                cur_b, cur_i, cur_u, cur_c = (bool(bold_arr[j0]), bool(italic_arr[j0]),
+                                               bool(underline_arr[j0]), color_arr[j0])
                 cur_t = ""
                 for j in range(j0, pos + n_line):
-                    b  = bool(bold_arr[j])
-                    it = bool(italic_arr[j])
-                    if b == cur_b and it == cur_i:
+                    b, it, u, c = (bool(bold_arr[j]), bool(italic_arr[j]),
+                                    bool(underline_arr[j]), color_arr[j])
+                    if (b, it, u, c) == (cur_b, cur_i, cur_u, cur_c):
                         cur_t += content[j]
                     else:
                         if cur_t:
-                            runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i})
-                        cur_b, cur_i, cur_t = b, it, content[j]
+                            runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i,
+                                         "underline": cur_u, "color": cur_c})
+                        cur_b, cur_i, cur_u, cur_c, cur_t = b, it, u, c, content[j]
                 if cur_t:
-                    runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i})
+                    runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i,
+                                 "underline": cur_u, "color": cur_c})
 
-            result.append({"bullet": is_bullet, "runs": runs})
+            result.append({"bullet": is_bullet, "numbered": is_numbered, "runs": runs})
             pos += n_line + 1
 
         return result
@@ -2038,13 +2260,28 @@ class NoteModule(ctk.CTkFrame):
     def _load_rich_text(self, widget: tk.Text, data: list, readonly: bool = False) -> None:
         widget.configure(state="normal")
         widget.delete("1.0", "end")
+        num_counter = 0
         for i, para in enumerate(data):
             if i > 0:
                 widget.insert("end", "\n")
-            if para["bullet"]:
+            if para.get("bullet"):
                 widget.insert("end", "• ")
+                num_counter = 0
+            elif para.get("numbered"):
+                num_counter += 1
+                widget.insert("end", f"{num_counter}. ")
+            else:
+                num_counter = 0
             for run in para["runs"]:
-                tags = tuple(t for t, v in [("bold", run["bold"]), ("italic", run["italic"])] if v)
+                tags = tuple(t for t, v in [
+                    ("bold", run.get("bold")), ("italic", run.get("italic")),
+                    ("underline", run.get("underline")),
+                ] if v)
+                color = run.get("color")
+                if color:
+                    tag = f"color_{color.lstrip('#')}"
+                    widget.tag_configure(tag, foreground=color)
+                    tags = tags + (tag,)
                 widget.insert("end", run["text"], tags)
         if readonly:
             widget.configure(state="disabled")
@@ -2106,6 +2343,7 @@ class NoteModule(ctk.CTkFrame):
             "talep_eden":       talep,
             "disciplines":  disciplines,
             "images":       list(self._images),
+            "captions":     {str(p): self._captions.get(str(p), "") for p in self._images},
             "photo_grid":   grid,
             "photo_crop":   self._note_crop_var.get(),
             "ext_pdfs":     list(self._ext_pdfs),
@@ -2197,12 +2435,23 @@ class NoteModule(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
+        self._set_app_icon()
         self.withdraw()
         self.cfg       = load_config()
         self._logo_img = make_logo(56)
         self._modules: dict = {}
+        self._update_q = queue.Queue()
+        self._update_dialog_open = False
         self._build_ui()
         SplashScreen(self, on_done=self._reveal)
+
+    def _set_app_icon(self) -> None:
+        icon_path = _app_icon_path()
+        if icon_path:
+            try:
+                self.iconbitmap(default=str(icon_path))
+            except Exception:
+                pass
 
     def _setup_window(self) -> None:
         self.title("Bakım ve Onarım Şube Müdürlüğü")
@@ -2219,12 +2468,90 @@ class App(ctk.CTk):
         self._setup_window()
         self.deiconify()
         self.after(20, self._fade_in)
+        self.after(1500, self._check_for_update)
+        self.after(200, self._poll_update_queue)
 
     def _fade_in(self, alpha: float = 0.0) -> None:
         alpha = min(1.0, alpha + 0.07)
         self.attributes("-alpha", alpha)
         if alpha < 1.0:
             self.after(14, self._fade_in, alpha)
+
+    # ── Uzaktan güncelleme bildirimi / kill-switch ─────────────────────────────
+    def _check_for_update(self) -> None:
+        def work():
+            manifest = update_check.fetch_manifest()
+            self._update_q.put(manifest)
+        threading.Thread(target=work, daemon=True).start()
+        self.after(UPDATE_CHECK_INTERVAL_MS, self._check_for_update)
+
+    def _poll_update_queue(self) -> None:
+        try:
+            while True:
+                manifest = self._update_q.get_nowait()
+                if manifest and not self._update_dialog_open:
+                    result = update_check.evaluate(APP_VERSION, manifest)
+                    if result["action"] != "none":
+                        self._update_dialog_open = True
+                        if result["action"] == "block":
+                            self._show_block_dialog(result)
+                        else:
+                            self._show_notify_dialog(result)
+        except queue.Empty:
+            pass
+        self.after(500, self._poll_update_queue)
+
+    def _show_block_dialog(self, result: dict) -> None:
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Uygulama Kullanım Dışı")
+        W, H = 420, 210
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        dlg.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
+        dlg.resizable(False, False)
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+        dlg.protocol("WM_DELETE_WINDOW", self._force_quit)
+        ctk.CTkLabel(dlg, text="⚠", font=fnt(32), text_color=WARN).pack(pady=(24, 4))
+        ctk.CTkLabel(dlg, text=result.get("message", ""), font=fnt(12),
+                     wraplength=360, justify="center").pack(padx=20, pady=(0, 16))
+        ctk.CTkButton(dlg, text="Kapat", width=140, height=36,
+                      corner_radius=18, fg_color=BTN_NEUTRAL, hover_color=BTN_NEU_H,
+                      font=fnt(12, True), command=self._force_quit).pack(pady=(0, 20))
+
+    def _force_quit(self) -> None:
+        self.destroy()
+        sys.exit(0)
+
+    def _show_notify_dialog(self, result: dict) -> None:
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Yeni Sürüm")
+        W, H = 420, 200
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        dlg.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        def _on_close():
+            self._update_dialog_open = False
+            dlg.destroy()
+
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+        ctk.CTkLabel(dlg, text="🔔", font=fnt(28)).pack(pady=(20, 4))
+        ctk.CTkLabel(dlg, text=result.get("message", ""), font=fnt(12),
+                     wraplength=360, justify="center").pack(padx=20, pady=(0, 16))
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(pady=(0, 18))
+
+        def _download():
+            webbrowser.open(result.get("download_url", update_check.DEFAULT_DOWNLOAD_URL))
+            _on_close()
+
+        ctk.CTkButton(btn_row, text="İndir", width=120, height=34,
+                      corner_radius=17, fg_color=BTN_PRIMARY, hover_color=BTN_HOVER,
+                      font=fnt(11, True), command=_download).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text="Daha Sonra", width=120, height=34,
+                      corner_radius=17, fg_color=BTN_NEUTRAL, hover_color=BTN_NEU_H,
+                      font=fnt(11), command=_on_close).pack(side="left", padx=6)
 
     def _build_ui(self) -> None:
         # Header (değişken içerik)
@@ -2240,7 +2567,7 @@ class App(ctk.CTk):
         foot = ctk.CTkFrame(self, fg_color="#D8E4F7", corner_radius=0, height=26)
         foot.pack(fill="x", side="bottom")
         foot.pack_propagate(False)
-        ctk.CTkLabel(foot, text="PDF Motor V1",
+        ctk.CTkLabel(foot, text=f"PDF Motor v{APP_VERSION}",
                      font=fnt(9), text_color=TEXT_LIGHT).pack(side="left", padx=14)
         ctk.CTkLabel(foot, text="© Bekircan Güler",
                      font=fnt(9), text_color=TEXT_LIGHT).pack(side="right", padx=14)
@@ -2262,7 +2589,7 @@ class App(ctk.CTk):
         tf.place(x=58, rely=0.5, anchor="w")
         ctk.CTkLabel(tf, text="Bakım ve Onarım Şube Müdürlüğü",
                      font=fnt(19, True), text_color="#FFFFFF").pack(anchor="w")
-        ctk.CTkLabel(tf, text="PDF Motor  V1",
+        ctk.CTkLabel(tf, text=f"PDF Motor  v{APP_VERSION}",
                      font=fnt(10), text_color="#6B9ECC").pack(anchor="w")
         ctk.CTkLabel(self._hdr, text="Bekircan Güler",
                      font=fnt(9), text_color="#3D6A9E").place(
