@@ -40,7 +40,7 @@ jobs:
           --noconfirm
           --onefile
           --windowed
-          --name FotografPDFConverter
+          --name "Bilgi Notu"
           --icon app.ico
           --collect-data customtkinter
           --collect-all docx
@@ -55,12 +55,12 @@ jobs:
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FotografPDFConverter
-          path: dist/FotografPDFConverter.exe
+          name: Bilgi Notu
+          path: "dist/Bilgi Notu.exe"
           retention-days: 30
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/FotografPDFConverter.exe
+          files: "dist/Bilgi Notu.exe"
