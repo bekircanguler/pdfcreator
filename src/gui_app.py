@@ -1475,6 +1475,9 @@ class NoteModule(ctk.CTkFrame):
                         tk_img = ImageTk.PhotoImage(pil_img)
                         self._photo_thumbs.append(tk_img)
                         label_widget.configure(image=tk_img, text="")
+                elif kind == "photo_drop":
+                    self._apply_photos(self._images + data,
+                                        f"+{len(data)} fotoğraf eklendi")
                 else:
                     self._on_error(data)
         except queue.Empty:
@@ -1646,7 +1649,10 @@ class NoteModule(ctk.CTkFrame):
         self._photo_count_lbl.pack(fill="x", padx=16, pady=(0, 4))
 
         if _HAS_WINDND:
-            windnd.hook_dropfiles(c3, func=self._on_photo_drop)
+            try:
+                windnd.hook_dropfiles(c3, func=self._on_photo_drop)
+            except Exception:
+                pass
 
         # Fotoğraf listesi — küçük resim + isteğe bağlı açıklama + kaldır
         ctk.CTkLabel(c3, text="Fotoğraf altına açıklama eklemek isteğe bağlıdır",
@@ -1986,29 +1992,39 @@ class NoteModule(ctk.CTkFrame):
         self._schedule_preview()
 
     def _on_photo_drop(self, file_list) -> None:
-        def _decode(p):
-            if isinstance(p, str):
-                return p
-            for enc in ("mbcs", "utf-8", "cp1254"):
-                try:
-                    return p.decode(enc)
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            return p.decode("latin-1", errors="replace")
+        # windnd bu callback'i Windows'un native mesaj işleyicisinden
+        # (WM_DROPFILES) doğrudan çağırıyor — Tk ana döngüsünün dışında,
+        # olası bir yeniden-giriş (reentrancy) durumu. Burada widget
+        # oluşturma/yok etme gibi Tk işlemleri YAPILMAZ; sadece yol ayrıştırma
+        # yapılıp sonuç kuyruğa konur, gerçek arayüz güncellemesi normal
+        # Tk döngüsünde çalışan _poll() içinde ertelenmiş olarak yapılır.
+        # Callback'ten sızan herhangi bir istisna ctypes sınırında uygulamayı
+        # çökertebileceği için tüm gövde try/except ile korunuyor.
+        try:
+            def _decode(p):
+                if isinstance(p, str):
+                    return p
+                for enc in ("mbcs", "utf-8", "cp1254"):
+                    try:
+                        return p.decode(enc)
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                return p.decode("latin-1", errors="replace")
 
-        dropped: List[Path] = []
-        for raw in file_list:
-            p = Path(_decode(raw))
-            if p.is_dir():
-                dropped.extend(scan_images(str(p)))
-            elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
-                dropped.append(p)
+            dropped: List[Path] = []
+            for raw in file_list:
+                p = Path(_decode(raw))
+                if p.is_dir():
+                    dropped.extend(scan_images(str(p)))
+                elif p.is_file() and p.suffix.lower() in IMAGE_EXTS:
+                    dropped.append(p)
 
-        existing = set(self._images)
-        added = [p for p in dropped if p not in existing]
-        if not added:
-            return
-        self._apply_photos(self._images + added, f"+{len(added)} fotoğraf eklendi")
+            existing = set(self._images)
+            added = [p for p in dropped if p not in existing]
+            if added:
+                self._q.put(("photo_drop", added))
+        except Exception:
+            pass
 
     # ── Fotoğraf listesi (küçük resim + açıklama + kaldır) ─────────────────────
     def _remove_photo(self, path: Path) -> None:
