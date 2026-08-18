@@ -2466,6 +2466,7 @@ class App(ctk.CTk):
         self._modules: dict = {}
         self._update_q = queue.Queue()
         self._update_dialog_open = False
+        self._update_status_var = tk.StringVar(value="Güncelleme kontrolü: henüz yapılmadı")
         self._build_ui()
         SplashScreen(self, on_done=self._reveal)
 
@@ -2492,6 +2493,7 @@ class App(ctk.CTk):
         self._setup_window()
         self.deiconify()
         self.after(20, self._fade_in)
+        update_check.log_debug("_reveal() çalıştı, ilk güncelleme kontrolü 1.5sn sonra planlandı")
         self.after(1500, self._check_for_update)
         self.after(200, self._poll_update_queue)
 
@@ -2503,16 +2505,26 @@ class App(ctk.CTk):
 
     # ── Uzaktan güncelleme bildirimi / kill-switch ─────────────────────────────
     def _check_for_update(self) -> None:
+        self._update_status_var.set("Güncelleme kontrolü: kontrol ediliyor…")
+        update_check.log_debug("_check_for_update() çağrıldı, arka plan thread başlatılıyor")
+
         def work():
-            manifest = update_check.fetch_manifest()
-            self._update_q.put(manifest)
+            update_check.log_debug("arka plan thread çalışıyor, fetch_manifest çağrılıyor")
+            try:
+                manifest, status = update_check.fetch_manifest()
+            except Exception as e:
+                manifest, status = None, f"work() içinde beklenmeyen hata: {type(e).__name__}: {e}"
+                update_check.log_debug(status)
+            self._update_q.put((manifest, status))
+
         threading.Thread(target=work, daemon=True).start()
         self.after(UPDATE_CHECK_INTERVAL_MS, self._check_for_update)
 
     def _poll_update_queue(self) -> None:
         try:
             while True:
-                manifest = self._update_q.get_nowait()
+                manifest, status = self._update_q.get_nowait()
+                self._update_status_var.set(f"Güncelleme kontrolü: {status}")
                 if manifest and not self._update_dialog_open:
                     result = update_check.evaluate(APP_VERSION, manifest)
                     if result["action"] != "none":
@@ -2593,6 +2605,8 @@ class App(ctk.CTk):
         foot.pack_propagate(False)
         ctk.CTkLabel(foot, text=f"PDF Motor v{APP_VERSION}",
                      font=fnt(9), text_color=TEXT_LIGHT).pack(side="left", padx=14)
+        ctk.CTkLabel(foot, textvariable=self._update_status_var,
+                     font=fnt(9), text_color=TEXT_LIGHT).pack(side="left", padx=6)
         ctk.CTkLabel(foot, text="© Bekircan Güler",
                      font=fnt(9), text_color=TEXT_LIGHT).pack(side="right", padx=14)
 
