@@ -126,30 +126,15 @@ class _PDFPainter:
         self._c.rect(x, y, w, h, fill=1, stroke=0)
 
     def draw_main_header(self) -> None:
+        # Not: PDF başlığında bilerek logo görseli kullanılmıyor (metin-only
+        # tasarım tercih edildi) — logo.png yalnızca Word (.docx) başlığında
+        # kullanılır, bkz. _build_docx().
         c = self._c
         y = PAGE_H - MARGIN
 
         self._rect_fill(MARGIN, y - 2, CONTENT_W, 2, hex_rgb("#2563EB"))
 
-        logo = _logo_path()
-        logo_h = 0.0
-        if logo:
-            try:
-                with Image.open(logo) as im:
-                    iw, ih = im.size
-                    logo_target_h = 36
-                    logo_target_w = int(iw * logo_target_h / ih)
-                    reader = ImageReader(str(logo))
-                    c.drawImage(reader, MARGIN, y - 2 - logo_target_h,
-                                width=logo_target_w, height=logo_target_h,
-                                preserveAspectRatio=True, mask="auto")
-                    logo_h = logo_target_h + 4
-                    text_x = MARGIN + logo_target_w + 8
-            except Exception:
-                text_x = MARGIN
-        else:
-            text_x = MARGIN
-
+        text_x = MARGIN
         c.setFont(self._body_reg, 8)
         c.setFillColorRGB(0.4, 0.4, 0.4)
         for i, line in enumerate(BIRIM_ADI.split("\n")):
@@ -160,7 +145,7 @@ class _PDFPainter:
         bw = pdfmetrics.stringWidth(BELGE_ADI, self._title_bold, 14)
         c.drawString(PAGE_W - MARGIN - bw, y - 4 - 14, BELGE_ADI)
 
-        sep_y = y - max(logo_h, 32) - 8
+        sep_y = y - 32 - 8
         self._hline(sep_y, 1.2, hex_rgb("#2563EB"))
         self.y = sep_y - 10
 

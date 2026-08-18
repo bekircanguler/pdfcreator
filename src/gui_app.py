@@ -1238,6 +1238,11 @@ class AciklamaEditDialog(ctk.CTkToplevel):
         self._text.bind("<Control-v>", self._paste_rich)
         self._text.bind("<Control-V>", self._paste_rich)
 
+        def _insert_tab_as_spaces(e):
+            self._text.insert("insert", "    ")
+            return "break"
+        self._text.bind("<Tab>", _insert_tab_as_spaces)
+
         # Alt butonlar
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.pack(fill="x", padx=12, pady=(0, 12))
@@ -2257,13 +2262,16 @@ class NoteModule(ctk.CTkFrame):
                 for j in range(j0, pos + n_line):
                     b, it, u, c = (bool(bold_arr[j]), bool(italic_arr[j]),
                                     bool(underline_arr[j]), color_arr[j])
+                    # Tab karakteri PDF/Word fontlarında boş "kutu" (.notdef)
+                    # glifi olarak çizildiği için burada boşluğa çevrilir.
+                    ch = "    " if content[j] == "\t" else content[j]
                     if (b, it, u, c) == (cur_b, cur_i, cur_u, cur_c):
-                        cur_t += content[j]
+                        cur_t += ch
                     else:
                         if cur_t:
                             runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i,
                                          "underline": cur_u, "color": cur_c})
-                        cur_b, cur_i, cur_u, cur_c, cur_t = b, it, u, c, content[j]
+                        cur_b, cur_i, cur_u, cur_c, cur_t = b, it, u, c, ch
                 if cur_t:
                     runs.append({"text": cur_t, "bold": cur_b, "italic": cur_i,
                                  "underline": cur_u, "color": cur_c})
